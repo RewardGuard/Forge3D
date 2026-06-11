@@ -1,0 +1,344 @@
+import React, { useState, useEffect } from 'react';
+import { useStore } from '../lib/store.js';
+
+const GEN_PROVIDERS = [
+  { id: 'mock', label: 'Mock' },
+  { id: 'hf', label: 'Hugging Face' },
+  { id: 'meshy', label: 'Meshy' },
+];
+
+const QUALITIES = [
+  { id: 'low', label: 'Light' },
+  { id: 'medium', label: 'Balanced' },
+  { id: 'high', label: 'High' },
+];
+
+export default function SettingsButton() {
+  const [open, setOpen] = useState(false);
+  const [meshyKey, setMeshyKey] = useState('');
+  const [hfToken, setHfToken] = useState('');
+  const [thingiToken, setThingiToken] = useState('');
+  const [keyInputs, setKeyInputs] = useState({}); // code-provider id -> typed key
+  const [usage, setUsage] = useState(null);       // per-provider remaining credits
+
+  // refresh credit balances whenever the panel opens
+  useEffect(() => {
+    if (!open) return;
+    setUsage(null);
+    window.forge.usage?.get().then(setUsage).catch(() => setUsage([]));
+  }, [open]);
+
+  const provider = useStore((s) => s.provider);
+  const codeProvider = useStore((s) => s.codeProvider);
+  const hasMeshyKey = useStore((s) => s.hasMeshyKey);
+  const hasHfToken = useStore((s) => s.hasHfToken);
+  const hasThingiverseToken = useStore((s) => s.hasThingiverseToken);
+  const hasAnthropicKey = useStore((s) => s.hasAnthropicKey);
+  const hasGeminiKey = useStore((s) => s.hasGeminiKey);
+  const hasGroqKey = useStore((s) => s.hasGroqKey);
+  const hasMistralKey = useStore((s) => s.hasMistralKey);
+  const hasOpenrouterKey = useStore((s) => s.hasOpenrouterKey);
+  const exportQuality = useStore((s) => s.exportQuality);
+  const uiZoom = useStore((s) => s.uiZoom);
+  const setUiZoom = useStore((s) => s.setUiZoom);
+  const lightLevel = useStore((s) => s.lightLevel);
+  const setLightLevel = useStore((s) => s.setLightLevel);
+  const theme = useStore((s) => s.theme);
+  const setTheme = useStore((s) => s.setTheme);
+
+  const setProvider = useStore((s) => s.setProvider);
+  const setCodeProvider = useStore((s) => s.setCodeProvider);
+  const setHasMeshyKey = useStore((s) => s.setHasMeshyKey);
+  const setHasHfToken = useStore((s) => s.setHasHfToken);
+  const setHasThingiverseToken = useStore((s) => s.setHasThingiverseToken);
+  const setHasAnthropicKey = useStore((s) => s.setHasAnthropicKey);
+  const setHasGeminiKey = useStore((s) => s.setHasGeminiKey);
+  const setHasGroqKey = useStore((s) => s.setHasGroqKey);
+  const setHasMistralKey = useStore((s) => s.setHasMistralKey);
+  const setHasOpenrouterKey = useStore((s) => s.setHasOpenrouterKey);
+  const setExportQuality = useStore((s) => s.setExportQuality);
+
+  // --- code (AI) providers, data-driven ---
+  const CODE_PROVIDERS = [
+    {
+      id: 'gemini', name: 'Google Gemini', tag: 'FREE', model: 'Gemini 2.0 Flash',
+      placeholder: 'AIza…', url: 'https://aistudio.google.com/app/apikey', urlLabel: 'aistudio.google.com',
+      note: 'Best free balance — ~15 req/min, 1500/day. No credit card needed.',
+      has: hasGeminiKey, setHas: setHasGeminiKey, save: (k) => window.forge.config.setGeminiKey(k), resKey: 'hasGeminiKey',
+    },
+    {
+      id: 'groq', name: 'Groq', tag: 'FREE', model: 'Llama 3.3 70B',
+      placeholder: 'gsk_…', url: 'https://console.groq.com/keys', urlLabel: 'console.groq.com',
+      note: 'Extremely fast inference, generous free tier. Great for quick iteration.',
+      has: hasGroqKey, setHas: setHasGroqKey, save: (k) => window.forge.config.setGroqKey(k), resKey: 'hasGroqKey',
+    },
+    {
+      id: 'mistral', name: 'Mistral', tag: 'FREE', model: 'Codestral',
+      placeholder: 'mistral key…', url: 'https://console.mistral.ai/api-keys/', urlLabel: 'console.mistral.ai',
+      note: 'Codestral is purpose-built for code. Free tier on La Plateforme.',
+      has: hasMistralKey, setHas: setHasMistralKey, save: (k) => window.forge.config.setMistralKey(k), resKey: 'hasMistralKey',
+    },
+    {
+      id: 'openrouter', name: 'OpenRouter', tag: 'FREE', model: 'Llama 3.3 70B (:free)',
+      placeholder: 'sk-or-…', url: 'https://openrouter.ai/keys', urlLabel: 'openrouter.ai',
+      note: 'One key, many models — several are completely free.',
+      has: hasOpenrouterKey, setHas: setHasOpenrouterKey, save: (k) => window.forge.config.setOpenrouterKey(k), resKey: 'hasOpenrouterKey',
+    },
+    {
+      id: 'anthropic', name: 'Claude', tag: 'PAID', model: 'Sonnet',
+      placeholder: 'sk-ant-…', url: 'https://console.anthropic.com/settings/keys', urlLabel: 'console.anthropic.com',
+      note: 'Highest quality, but the Anthropic API needs prepaid credits (Plans & Billing).',
+      has: hasAnthropicKey, setHas: setHasAnthropicKey, save: (k) => window.forge.config.setAnthropicKey(k), resKey: 'hasAnthropicKey',
+    },
+    {
+      id: 'mock', name: 'Mock', tag: 'FREE', model: 'placeholder',
+      note: 'No account — generates a placeholder sketch so you can test the flow.',
+      noKey: true,
+    },
+  ];
+
+  const activeCode = CODE_PROVIDERS.find((p) => p.id === codeProvider) || CODE_PROVIDERS[0];
+  const codeReady = activeCode.noKey || activeCode.has;
+
+  async function chooseGenProvider(id) {
+    await window.forge.config.setProvider(id);
+    setProvider(id);
+  }
+  async function chooseCodeProvider(id) {
+    await window.forge.config.setCodeProvider(id);
+    setCodeProvider(id);
+  }
+  async function saveCodeKey(p) {
+    const val = (keyInputs[p.id] || '').trim();
+    const res = await p.save(val);
+    p.setHas(Boolean(res?.[p.resKey]));
+    setKeyInputs((k) => ({ ...k, [p.id]: '' }));
+  }
+  async function saveMeshy() {
+    const res = await window.forge.config.setMeshyKey(meshyKey);
+    setHasMeshyKey(Boolean(res.hasMeshyKey)); setMeshyKey('');
+  }
+  async function saveHf() {
+    const res = await window.forge.config.setHfToken(hfToken);
+    setHasHfToken(Boolean(res.hasHfToken)); setHfToken('');
+  }
+  async function saveThingi() {
+    const res = await window.forge.config.setThingiverseToken(thingiToken);
+    setHasThingiverseToken(Boolean(res.hasThingiverseToken)); setThingiToken('');
+  }
+
+  function openLink(e, url) {
+    e.preventDefault();
+    window.forge?.openExternal ? window.forge.openExternal(url) : window.open(url, '_blank');
+  }
+
+  return (
+    <div className="settings">
+      <button className={'pill' + (codeReady ? ' ok' : '')} onClick={() => setOpen(true)} title="Settings & API keys">
+        <span className="gear">⚙</span> Settings
+        <span className={'pill-dot' + (codeReady ? ' ok' : '')} />
+      </button>
+
+      {open && (
+        <div className="modal-backdrop" onClick={() => setOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>Settings</h3>
+              <button className="modal-x" onClick={() => setOpen(false)} title="Close">✕</button>
+            </div>
+
+            <div className="modal-body">
+              {/* ============ AI CODE GENERATION ============ */}
+              <section className="set-section">
+                <h4>AI code generation</h4>
+                <p className="muted small">
+                  Pick who writes your Arduino sketches. <b>Gemini, Groq, Mistral and OpenRouter are free</b> —
+                  create a key, paste it below, and you're set.
+                </p>
+
+                <div className="prov-grid">
+                  {CODE_PROVIDERS.map((p) => (
+                    <button
+                      key={p.id}
+                      className={'prov-card' + (codeProvider === p.id ? ' on' : '')}
+                      onClick={() => chooseCodeProvider(p.id)}
+                    >
+                      <span className="prov-name">{p.name}</span>
+                      <span className={'prov-tag ' + (p.tag === 'PAID' ? 'paid' : 'free')}>{p.tag}</span>
+                      <span className="prov-model">{p.model}</span>
+                      {(p.noKey || p.has) && <span className="prov-check">{p.noKey ? '•' : '✓ key'}</span>}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="set-card">
+                  <div className="row" style={{ alignItems: 'baseline' }}>
+                    <b>{activeCode.name}</b>
+                    <span className={'prov-tag ' + (activeCode.tag === 'PAID' ? 'paid' : 'free')}>{activeCode.tag}</span>
+                    <span className="spacer" />
+                    {!activeCode.noKey && (
+                      <span className={'tok ' + (activeCode.has ? 'ok' : '')}>
+                        {activeCode.has ? 'key saved ✓' : 'no key yet'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="muted small">{activeCode.note}</p>
+
+                  {activeCode.noKey ? (
+                    <p className="muted small">Nothing to configure — switch to a real provider above for working code.</p>
+                  ) : (
+                    <>
+                      <a className="link-btn" href={activeCode.url} onClick={(e) => openLink(e, activeCode.url)}>
+                        ↗ Get a free key at {activeCode.urlLabel}
+                      </a>
+                      <div className="key-row">
+                        <input
+                          type="password"
+                          placeholder={activeCode.placeholder}
+                          value={keyInputs[activeCode.id] || ''}
+                          onChange={(e) => setKeyInputs((k) => ({ ...k, [activeCode.id]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === 'Enter') saveCodeKey(activeCode); }}
+                        />
+                        <button className="btn primary" onClick={() => saveCodeKey(activeCode)}>Save key</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </section>
+
+              {/* ============ APPEARANCE ============ */}
+              <section className="set-section">
+                <h4>Appearance</h4>
+                <label className="lbl">Theme</label>
+                <div className="seg">
+                  {[{ id: 'dark', label: '🌙 Dark' }, { id: 'light', label: '☀️ Light' }].map((t) => (
+                    <button key={t.id} className={'seg-btn' + (theme === t.id ? ' on' : '')} onClick={() => setTheme(t.id)}>{t.label}</button>
+                  ))}
+                </div>
+                <label className="lbl">Interface size</label>
+                <div className="seg">
+                  {[{ v: 0.9, l: 'Compact' }, { v: 1, l: 'Default' }, { v: 1.1, l: 'Large' }, { v: 1.25, l: 'XL' }].map((o) => (
+                    <button key={o.v} className={'seg-btn' + (uiZoom === o.v ? ' on' : '')} onClick={() => setUiZoom(o.v)}>{o.l}</button>
+                  ))}
+                </div>
+                <label className="lbl">3D lighting — {Math.round(lightLevel * 100)}%</label>
+                <input type="range" min="0.5" max="1.5" step="0.05" value={lightLevel}
+                  onChange={(e) => setLightLevel(parseFloat(e.target.value))} />
+                <p className="muted small">Affects the 3D Design viewport and the Life Simulator. Settings persist between sessions.</p>
+              </section>
+
+              {/* ============ API CREDITS ============ */}
+              <section className="set-section">
+                <h4>API credits remaining</h4>
+                <p className="muted small">Free providers are unlimited (∞). Paid ones show your remaining balance where the provider exposes it.</p>
+                <div className="credit-list">
+                  {!usage ? (
+                    <p className="muted small">Checking balances…</p>
+                  ) : usage.length === 0 ? (
+                    <p className="muted small">No providers to report.</p>
+                  ) : (
+                    usage.map((u) => (
+                      <div key={u.id} className="credit-row">
+                        <span className="credit-name">
+                          {u.name}{!u.hasKey && <span className="muted"> · no key</span>}
+                        </span>
+                        <span className={'credit-val' + (u.remaining === '∞' ? ' inf' : '')}>{u.remaining}</span>
+                        <span className="credit-note">{u.note}</span>
+                        {u.url && <a className="link-btn credit-link" href={u.url} onClick={(e) => openLink(e, u.url)}>↗ console</a>}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+
+              {/* ============ 3D MODEL GENERATOR ============ */}
+              <section className="set-section">
+                <h4>3D model generator</h4>
+                <div className="seg">
+                  {GEN_PROVIDERS.map((p) => (
+                    <button
+                      key={p.id}
+                      className={'seg-btn' + (provider === p.id ? ' on' : '')}
+                      onClick={() => chooseGenProvider(p.id)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {provider === 'mock' && (
+                  <p className="muted small">Free placeholder meshes — no account needed.</p>
+                )}
+                {provider === 'hf' && (
+                  <div className="set-card">
+                    <p className="muted small">
+                      Free text-to-3D via the Shap-E Space. Needs a <b>free</b> Hugging Face token (read scope).
+                    </p>
+                    <a className="link-btn" href="https://huggingface.co/settings/tokens" onClick={(e) => openLink(e, 'https://huggingface.co/settings/tokens')}>
+                      ↗ Get a token at huggingface.co
+                    </a>
+                    <div className="key-row">
+                      <input type="password" placeholder="hf_…" value={hfToken} onChange={(e) => setHfToken(e.target.value)} />
+                      <button className="btn primary" onClick={saveHf}>Save</button>
+                    </div>
+                    <span className={'tok ' + (hasHfToken ? 'ok' : '')}>{hasHfToken ? 'token saved ✓' : 'no token'}</span>
+                  </div>
+                )}
+                {provider === 'meshy' && (
+                  <div className="set-card">
+                    <p className="muted small">High-quality, but Meshy's API is a paid plan ($20/mo+).</p>
+                    <a className="link-btn" href="https://www.meshy.ai/api" onClick={(e) => openLink(e, 'https://www.meshy.ai/api')}>
+                      ↗ Get a key at meshy.ai
+                    </a>
+                    <div className="key-row">
+                      <input type="password" placeholder="msy_…" value={meshyKey} onChange={(e) => setMeshyKey(e.target.value)} />
+                      <button className="btn primary" onClick={saveMeshy}>Save</button>
+                    </div>
+                    <span className={'tok ' + (hasMeshyKey ? 'ok' : '')}>{hasMeshyKey ? 'key saved ✓' : 'no key'}</span>
+                  </div>
+                )}
+              </section>
+
+              {/* ============ THINGIVERSE ============ */}
+              <section className="set-section">
+                <h4>Thingiverse search</h4>
+                <div className="set-card">
+                  <p className="muted small">Free model search & STL import. Needs a <b>free</b> Thingiverse app token.</p>
+                  <a className="link-btn" href="https://www.thingiverse.com/developers" onClick={(e) => openLink(e, 'https://www.thingiverse.com/developers')}>
+                    ↗ Register an app at thingiverse.com/developers
+                  </a>
+                  <div className="key-row">
+                    <input type="password" placeholder="thingiverse app token" value={thingiToken} onChange={(e) => setThingiToken(e.target.value)} />
+                    <button className="btn primary" onClick={saveThingi}>Save</button>
+                  </div>
+                  <span className={'tok ' + (hasThingiverseToken ? 'ok' : '')}>{hasThingiverseToken ? 'token saved ✓' : 'no token'}</span>
+                </div>
+              </section>
+
+              {/* ============ EXPORT QUALITY ============ */}
+              <section className="set-section">
+                <h4>3D export quality</h4>
+                <p className="muted small">Higher quality keeps more geometry detail (bigger files).</p>
+                <div className="seg">
+                  {QUALITIES.map((q) => (
+                    <button
+                      key={q.id}
+                      className={'seg-btn' + (exportQuality === q.id ? ' on' : '')}
+                      onClick={() => setExportQuality(q.id)}
+                    >
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <div className="modal-foot">
+              <button className="btn primary" onClick={() => setOpen(false)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
