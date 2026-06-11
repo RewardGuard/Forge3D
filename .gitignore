@@ -1,0 +1,15 @@
+# dependencies & build output
+node_modules/
+dist/
+release/
+build/
+
+# local tooling / personal
+.claude/
+.DS_Store
+*.log
+
+# user data never lives here, but belt & suspenders
+*.config.json
+.env
+.env.*
