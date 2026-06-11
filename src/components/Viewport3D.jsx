@@ -201,20 +201,23 @@ function MeshItem({ mesh, ghost = false }) {
     selectMesh(mesh.id, add);
   };
 
-  // snapshot start positions of all selected when a drag begins (for group move)
+  // snapshot the full start transform of every selected object when a drag
+  // begins, so group rotate/scale can orbit siblings around the primary
   const onGizmoDown = () => {
     const ids = useStore.getState().selectedMeshIds;
     const base = {};
     for (const id of ids) {
       const o = groupRegistry.get(id);
-      if (o) base[id] = o.position.clone();
+      if (o) base[id] = { p: o.position.clone(), q: o.quaternion.clone(), s: o.scale.clone() };
     }
     dragBase.current = base;
   };
 
   // Commit CONTINUOUSLY while the gizmo moves (reliable across drei versions, so
-  // transforms always stick — fixes scale/position snapping back). Also moves the
-  // other selected objects by the same translation delta (group move).
+  // transforms always stick). Group behavior depends on the tool:
+  //  - move: siblings translate by the same delta
+  //  - rotate: siblings ORBIT the primary and spin with it (negatives included)
+  //  - scale: siblings scale and their offsets stretch from the primary
   const onGizmoChange = () => {
     const o = groupRef.current;
     if (!o) return;
@@ -223,20 +226,37 @@ function MeshItem({ mesh, ghost = false }) {
       [mesh.id]: {
         position: [round(o.position.x), round(o.position.y), round(o.position.z)],
         rotation: [round(o.rotation.x), round(o.rotation.y), round(o.rotation.z)],
-        // keep ALL THREE axes — committing only X made stretched shapes
-        // (square → rectangle) snap back to their original proportions
         scale: packScale(round(o.scale.x), round(o.scale.y), round(o.scale.z)),
       },
     };
     const base = dragBase.current;
     if (base && base[mesh.id] && ids.length > 1) {
-      const dx = o.position.x - base[mesh.id].x;
-      const dy = o.position.y - base[mesh.id].y;
-      const dz = o.position.z - base[mesh.id].z;
+      const pb = base[mesh.id];
+      const pivot = pb.p;
       for (const id of ids) {
         if (id === mesh.id) continue;
         const b = base[id];
-        if (b) patches[id] = { position: [round(b.x + dx), round(b.y + dy), round(b.z + dz)] };
+        if (!b) continue;
+        if (transformMode === 'rotate') {
+          const qDelta = o.quaternion.clone().multiply(pb.q.clone().invert());
+          const np = b.p.clone().sub(pivot).applyQuaternion(qDelta).add(pivot);
+          const e = new THREE.Euler().setFromQuaternion(qDelta.clone().multiply(b.q));
+          patches[id] = {
+            position: [round(np.x), round(np.y), round(np.z)],
+            rotation: [round(e.x), round(e.y), round(e.z)],
+          };
+        } else if (transformMode === 'scale') {
+          const f = new THREE.Vector3(
+            o.scale.x / (pb.s.x || 1), o.scale.y / (pb.s.y || 1), o.scale.z / (pb.s.z || 1));
+          const np = b.p.clone().sub(pivot).multiply(f).add(pivot);
+          patches[id] = {
+            position: [round(np.x), round(np.y), round(np.z)],
+            scale: packScale(round(b.s.x * f.x), round(b.s.y * f.y), round(b.s.z * f.z)),
+          };
+        } else {
+          const np = b.p.clone().add(o.position).sub(pivot);
+          patches[id] = { position: [round(np.x), round(np.y), round(np.z)] };
+        }
       }
     }
     updateMeshes(patches);
