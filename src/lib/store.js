@@ -166,6 +166,35 @@ export const useStore = create((set, get) => ({
     })),
   setMeshNegative: (id, negative) =>
     set((s) => ({ meshes: s.meshes.map((m) => (m.id === id ? { ...m, negative } : m)) })),
+  // Replace a group's members with ONE baked mesh (real merge, not a sticker).
+  // Non-mergeable members (loaded models) survive, ungrouped.
+  bakeGroup: (groupId, baked) =>
+    set((s) => {
+      const members = s.meshes.filter((m) => m.groupId === groupId);
+      const primary = members.find((m) => !m.negative) || members[0];
+      const keep = s.meshes.map((m) =>
+        m.groupId === groupId
+          ? ((m.kind === 'meshy' || m.kind === 'stl') && m.modelUrl ? { ...m, groupId: null } : null)
+          : m
+      ).filter(Boolean);
+      const id = 'm' + Date.now() + Math.random().toString(36).slice(2, 6);
+      keep.push({
+        id,
+        kind: 'baked',
+        label: (primary?.label || 'merged') + ' (merged)',
+        color: primary?.color || '#8aa0c8',
+        materialKey: primary?.materialKey,
+        geom: baked.geom,
+        halfY: baked.halfY,
+        position: baked.center,
+        rotation: [0, 0, 0],
+        scale: 1,
+      });
+      return { meshes: keep, selectedMeshId: id, selectedMeshIds: [id] };
+    }),
+  // reverse the spin direction a motor imparts on its attached object
+  setSpinReverse: (id, spinReverse) =>
+    set((s) => ({ meshes: s.meshes.map((m) => (m.id === id ? { ...m, spinReverse } : m)) })),
   setTransformMode: (transformMode) => set({ transformMode }),
   updateMesh: (id, patch) =>
     set((s) => ({ meshes: s.meshes.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
