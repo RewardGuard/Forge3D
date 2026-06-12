@@ -10,6 +10,7 @@ import { Evaluator, Brush, ADDITION, SUBTRACTION } from 'three-bvh-csg';
 import { useStore } from '../lib/store.js';
 import { resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr, packScale } from '../lib/scaleUtil.js';
+import { makeGeometry, bakedGeometry } from '../lib/geometryFactory.js';
 
 // PBR hints derived from the mesh's assigned physical material (metal vs not).
 function pbrFor(mesh) {
@@ -19,8 +20,15 @@ function pbrFor(mesh) {
     : { metalness: 0.08, roughness: 0.62 };
 }
 
+// merged-group geometry, rebuilt from serialized arrays
+function BakedGeometry({ mesh }) {
+  const geo = React.useMemo(() => bakedGeometry(mesh), [mesh.geom]);
+  return <primitive object={geo} attach="geometry" />;
+}
+
 // ---- primitive geometry for a given mesh kind ----
 function PrimitiveGeometry({ mesh }) {
+  if (mesh.kind === 'baked') return <BakedGeometry mesh={mesh} />;
   switch (mesh.kind) {
     case 'sphere': return <sphereGeometry args={[0.5, 32, 32]} />;
     case 'cylinder': return <cylinderGeometry args={[0.4, 0.4, 1, 48]} />;
@@ -89,23 +97,7 @@ class MeshErrorBoundary extends React.Component {
 // objects (multi-select group move).
 const groupRegistry = new Map(); // mesh id -> THREE.Object3D
 
-// Imperative twin of PrimitiveGeometry, for building CSG brushes.
-function makeGeometry(mesh) {
-  switch (mesh.kind) {
-    case 'sphere': return new THREE.SphereGeometry(0.5, 32, 32);
-    case 'cylinder': return new THREE.CylinderGeometry(0.4, 0.4, 1, 48);
-    case 'cone': return new THREE.ConeGeometry(0.5, 1, 48);
-    case 'pyramid': return new THREE.ConeGeometry(0.6, 1, 4);
-    case 'torus': return new THREE.TorusGeometry(0.4, 0.16, 24, 64);
-    case 'torusknot': return new THREE.TorusKnotGeometry(0.34, 0.12, 128, 24);
-    case 'plane': return new THREE.BoxGeometry(1, 0.02, 1);
-    case 'capsule': return new THREE.CapsuleGeometry(0.3, 0.6, 8, 24);
-    case 'tetrahedron': return new THREE.TetrahedronGeometry(0.6);
-    case 'icosahedron': return new THREE.IcosahedronGeometry(0.6);
-    case 'part': return new THREE.BoxGeometry(...(mesh.size || [0.1, 0.1, 0.1]));
-    default: return new THREE.BoxGeometry(1, 1, 1);
-  }
-}
+// (geometry building shared with the merger/exporters lives in geometryFactory)
 
 // Can this mesh participate in boolean cuts? (loaded models are excluded —
 // CSG on arbitrary GLB/STL geometry is too heavy/fragile for live editing)
@@ -305,6 +297,10 @@ function MeshItem({ mesh, ghost = false }) {
             metalness={pbr.metalness}
             roughness={pbr.roughness}
             envMapIntensity={0.9}
+            // CSG cut surfaces can have flipped slivers at the rim — render
+            // both faces and shade flat so merged objects look solid
+            side={mesh.kind === 'baked' ? THREE.DoubleSide : THREE.FrontSide}
+            flatShading={mesh.kind === 'baked'}
           />
         )}
       </mesh>

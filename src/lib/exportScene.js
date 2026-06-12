@@ -30,6 +30,13 @@ function primitiveGeometry(mesh, q) {
     case 'icosahedron': return new THREE.IcosahedronGeometry(0.6);
     case 'part': return new THREE.BoxGeometry(...(mesh.size || [0.1, 0.1, 0.1]));
     case 'box': return new THREE.BoxGeometry(1, 1, 1);
+    case 'baked': { // merged group — rebuild from serialized arrays
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(mesh.geom?.positions || [], 3));
+      if (mesh.geom?.normals?.length) g.setAttribute('normal', new THREE.Float32BufferAttribute(mesh.geom.normals, 3));
+      else g.computeVertexNormals();
+      return g;
+    }
     default: return new THREE.BoxGeometry(1, 1, 1);
   }
 }

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useStore } from '../lib/store.js';
 import { scaleArr, packScale, avgScale } from '../lib/scaleUtil.js';
+import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 const AXES = ['x', 'y', 'z'];
 const MODES = [
@@ -17,6 +18,8 @@ export default function Inspector() {
   const groupSelected = useStore((s) => s.groupSelected);
   const ungroupSelected = useStore((s) => s.ungroupSelected);
   const selectMeshOnly = useStore((s) => s.selectMeshOnly);
+  const bakeGroup = useStore((s) => s.bakeGroup);
+  const setSpinReverse = useStore((s) => s.setSpinReverse);
   const setMeshNegative = useStore((s) => s.setMeshNegative);
   const updateMesh = useStore((s) => s.updateMesh);
   const removeMesh = useStore((s) => s.removeMesh);
@@ -142,6 +145,17 @@ export default function Inspector() {
       )}
       {mesh.groupId && (
         <>
+          <button
+            className="btn primary full"
+            title="Bake the group into ONE real object (union minus negatives). It then moves, rotates and exports as a single shape — and can be cut again."
+            onClick={() => {
+              const members = meshes.filter((m) => m.groupId === mesh.groupId);
+              const baked = mergeMembersToBaked(members);
+              if (baked) bakeGroup(mesh.groupId, baked);
+            }}
+          >
+            ⊕ Merge into one object
+          </button>
           <button className="btn full" onClick={ungroupSelected}>⬚ Ungroup (⌘⇧G)</button>
           <label className="lbl">Group members — click to edit one</label>
           <div className="row wrap">
@@ -186,14 +200,26 @@ export default function Inspector() {
         ))}
       </select>
       {mesh.attachedTo && (
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={mesh.drives !== false}
-            onChange={(e) => setAttachment(mesh.id, mesh.attachedTo, e.target.checked)}
-          />
-          <span>Drives it (spins the target when this motor is powered)</span>
-        </label>
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={mesh.drives !== false}
+              onChange={(e) => setAttachment(mesh.id, mesh.attachedTo, e.target.checked)}
+            />
+            <span>Drives it (spins the target when this motor is powered)</span>
+          </label>
+          {mesh.drives !== false && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={Boolean(mesh.spinReverse)}
+                onChange={(e) => setSpinReverse(mesh.id, e.target.checked)}
+              />
+              <span>Reverse spin direction (−)</span>
+            </label>
+          )}
+        </>
       )}
       <p className="muted small">Mount a motor/servo onto a wheel or arm — in the Life Sim the target spins while the driver has power.</p>
 

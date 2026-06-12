@@ -62,7 +62,19 @@ class BodyErrorBoundary extends React.Component {
   render() { return this.state.failed ? this.props.fallback : this.props.children; }
 }
 
+function BakedGeom({ mesh }) {
+  const geo = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(mesh.geom?.positions || [], 3));
+    if (mesh.geom?.normals?.length) g.setAttribute('normal', new THREE.Float32BufferAttribute(mesh.geom.normals, 3));
+    else g.computeVertexNormals();
+    return g;
+  }, [mesh.geom]);
+  return <primitive object={geo} attach="geometry" />;
+}
+
 function geometryFor(mesh) {
+  if (mesh.kind === 'baked') return <BakedGeom mesh={mesh} />;
   switch (mesh.kind) {
     case 'sphere': return <sphereGeometry args={[0.5, 32, 32]} />;
     case 'cylinder': return <cylinderGeometry args={[0.4, 0.4, 1, 48]} />;
@@ -84,7 +96,13 @@ const SMOKE_N = 6;
 
 const INPUT_KINDS = new Set(['push-button', 'toggle-switch', 'potentiometer', 'joystick']);
 
-function SimMesh({ mesh, spinning, stateRef, materialKey, running }) {
+// Spin axis that makes mechanical sense per shape: a torus/knot tire rolls
+// around its central (local Z) axis; cylinders/discs around local Y; the rest
+// default to Y. The user's own rotation (e.g. standing a tire upright) is on
+// the parent group, so the local axis stays the true axle.
+const SPIN_AXIS = { torus: 'z', torusknot: 'z' };
+
+function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }) {
   const setInput = useStore((s) => s.setInput);
   const toggleInput = useStore((s) => s.toggleInput);
   const inputs = useStore((s) => s.inputs);
@@ -118,7 +136,9 @@ function SimMesh({ mesh, spinning, stateRef, materialKey, running }) {
 
   const isModel = (mesh.kind === 'meshy' || mesh.kind === 'stl') && mesh.modelUrl;
   // ground rest height: half the object's (normalized) height — Y axis scale
-  const restY = mesh.kind === 'part' && mesh.size ? mesh.size[1] / 2 : 0.5 * scaleArr(mesh.scale)[1];
+  const restY = mesh.kind === 'part' && mesh.size ? mesh.size[1] / 2
+    : mesh.kind === 'baked' ? (mesh.halfY || 0.5) * scaleArr(mesh.scale)[1]
+    : 0.5 * scaleArr(mesh.scale)[1];
 
   useFrame((st, dt) => {
     // ---- gravity: while running, unattached objects fall to the ground ----
@@ -143,7 +163,7 @@ function SimMesh({ mesh, spinning, stateRef, materialKey, running }) {
     const s = stateRef.current?.objects?.[mesh.id];
     const body = bodyRef.current;
     if (!body) return;
-    if (spinning && (!s || !s.destroyed)) body.rotation.y += dt * 6;
+    if (spinning && (!s || !s.destroyed)) body.rotation[SPIN_AXIS[mesh.kind] || 'y'] += dt * 6 * spinDir;
 
     if (!s) return;
 
@@ -310,13 +330,13 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
   const stateRef = useRef(null);
   const bg = theme === 'light' ? '#dfe5ec' : '#0e1116';
 
-  const spinningIds = useMemo(() => {
+  const spinMeta = useMemo(() => {
     // The MOTOR drives the OTHER object, regardless of which side the user
-    // attached: object→motor or motor→object, the non-motor part spins.
+    // attached. Each target gets a direction (+1/−1, flippable in Inspector).
     const MOTORISH = new Set(['dc-motor', 'servo-sg90', 'servo-mg996', 'stepper-28byj', 'stepper-nema17', 'vibration-motor', 'pump-12v', 'linear-actuator']);
     const isMotor = (m) => !!m && MOTORISH.has(m.partId);
     const byId = Object.fromEntries(meshes.map((m) => [m.id, m]));
-    const set = new Set();
+    const map = {}; // target id -> dir
     for (const m of meshes) {
       if (!m.attachedTo || m.drives === false) continue;
       const parent = byId[m.attachedTo];
@@ -324,9 +344,9 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
       const target = isMotor(m) && !isMotor(parent) ? parent
         : isMotor(parent) && !isMotor(m) ? m
         : parent; // neither/both motors: keep old behavior
-      set.add(target.id);
+      map[target.id] = m.spinReverse || parent.spinReverse ? -1 : 1;
     }
-    return set;
+    return map;
   }, [meshes]);
 
   const matByMesh = useMemo(() => {
@@ -346,13 +366,13 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
       <ContactShadows position={[0, 0.001, 0]} opacity={theme === 'light' ? 0.35 : 0.55} scale={14} blur={2.4} far={6} resolution={1024} />
 
       {meshes.map((m) => (
-        <SimMesh key={m.id} mesh={m} spinning={running && spinningIds.has(m.id)} stateRef={stateRef} materialKey={matByMesh[m.id]} running={running} />
+        <SimMesh key={m.id} mesh={m} spinning={running && m.id in spinMeta} spinDir={spinMeta[m.id] || 1} stateRef={stateRef} materialKey={matByMesh[m.id]} running={running} />
       ))}
       {hazards.map((h) => (
         <HazardMarker key={h.id} hazard={h} />
       ))}
 
-      <Engine running={running} hazards={hazards} onReport={onReport} stateRef={stateRef} resetSignal={resetSignal} drivenIds={spinningIds} />
+      <Engine running={running} hazards={hazards} onReport={onReport} stateRef={stateRef} resetSignal={resetSignal} drivenIds={new Set(Object.keys(spinMeta))} />
       <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
       <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="#cbd5e1" />
