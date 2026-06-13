@@ -172,20 +172,24 @@ export const useStore = create((set, get) => ({
     set((s) => {
       const members = s.meshes.filter((m) => m.groupId === groupId);
       const primary = members.find((m) => !m.negative) || members[0];
+      // non-mergeable members (loaded models, e.g. an AI tire) STAY in the
+      // group with the baked body, so the assembly keeps behaving as one unit
       const keep = s.meshes.map((m) =>
         m.groupId === groupId
-          ? ((m.kind === 'meshy' || m.kind === 'stl') && m.modelUrl ? { ...m, groupId: null } : null)
+          ? ((m.kind === 'meshy' || m.kind === 'stl') && m.modelUrl ? m : null)
           : m
       ).filter(Boolean);
       const id = 'm' + Date.now() + Math.random().toString(36).slice(2, 6);
       keep.push({
         id,
         kind: 'baked',
+        groupId,
         label: (primary?.label || 'merged') + ' (merged)',
         color: primary?.color || '#8aa0c8',
         materialKey: primary?.materialKey,
         geom: baked.geom,
         halfY: baked.halfY,
+        half: baked.half,
         position: baked.center,
         rotation: [0, 0, 0],
         scale: 1,

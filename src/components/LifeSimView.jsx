@@ -97,7 +97,62 @@ const SMOKE_N = 6;
 
 const INPUT_KINDS = new Set(['push-button', 'toggle-switch', 'potentiometer', 'joystick']);
 
-function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }) {
+// half-extents of a mesh's AABB in world units (approximate, axis-aligned)
+function halfExtents(m) {
+  if (m.kind === 'part' && Array.isArray(m.size)) return [m.size[0] / 2, m.size[1] / 2, m.size[2] / 2];
+  const s = scaleArr(m.scale);
+  if (m.kind === 'baked' && Array.isArray(m.half)) return [m.half[0] * s[0], m.half[1] * s[1], m.half[2] * s[2]];
+  if (m.kind === 'baked') return [0.5 * s[0], (m.halfY ?? 0.5) * s[1], 0.5 * s[2]];
+  return [0.5 * s[0], 0.5 * s[1], 0.5 * s[2]];
+}
+
+// Rigid-unit gravity with stacking collisions. A "unit" is a whole group (or a
+// single ungrouped mesh): it falls as ONE body and rests on the ground OR on
+// top of other units (AABB overlap) — parts no longer sink through the chassis.
+function GravityEngine({ units, running, fallRef }) {
+  useFrame((_, dtRaw) => {
+    const S = fallRef.current;
+    if (!running) { S.off = {}; S.vy = {}; return; }
+    const dt = Math.min(0.05, dtRaw);
+    // current AABB of each unit (members move together by the unit offset)
+    const boxes = units.map((u) => {
+      const off = S.off[u.id] ?? 0;
+      let minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
+      for (const m of u.members) {
+        const h = halfExtents(m);
+        minX = Math.min(minX, m.position[0] - h[0]); maxX = Math.max(maxX, m.position[0] + h[0]);
+        minY = Math.min(minY, m.position[1] + off - h[1]); maxY = Math.max(maxY, m.position[1] + off + h[1]);
+        minZ = Math.min(minZ, m.position[2] - h[2]); maxZ = Math.max(maxZ, m.position[2] + h[2]);
+      }
+      return { u, minX, maxX, minY, maxY, minZ, maxZ };
+    });
+    // settle lowest-first so stacks resolve bottom-up
+    boxes.sort((a, b) => a.minY - b.minY);
+    const settled = [];
+    for (const b of boxes) {
+      let vy = (S.vy[b.u.id] ?? 0) - 9.8 * dt;
+      let dy = vy * dt;
+      // rest height: ground, or the top of any unit we overlap in XZ and sit above
+      let restAt = 0;
+      for (const d of settled) {
+        const xo = b.minX < d.maxX && b.maxX > d.minX;
+        const zo = b.minZ < d.maxZ && b.maxZ > d.minZ;
+        if (xo && zo && b.minY >= d.maxY - 0.03) restAt = Math.max(restAt, d.maxY);
+      }
+      if (b.minY + dy <= restAt + 1e-4 && vy <= 0) {
+        dy = restAt - b.minY; // land exactly on the surface and stop
+        vy = 0;
+      }
+      S.off[b.u.id] = (S.off[b.u.id] ?? 0) + dy;
+      S.vy[b.u.id] = vy;
+      b.minY += dy; b.maxY += dy;
+      settled.push(b);
+    }
+  });
+  return null;
+}
+
+function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running, unitKey, fallRef }) {
   const setInput = useStore((s) => s.setInput);
   const toggleInput = useStore((s) => s.toggleInput);
   const inputs = useStore((s) => s.inputs);
@@ -121,7 +176,6 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }
   } : {};
   const bodyRef = useRef();
   const rootRef = useRef();
-  const vyRef = useRef(0); // vertical velocity for gravity
   const axleRef = useRef(null); // detected spin axis ('x'|'y'|'z') + child count
   const matsRef = useRef(null); // [{ mat, base }] gathered from the body subtree
   const fireRef = useRef();
@@ -131,30 +185,13 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }
   const top = useMemo(() => 0.55, []); // local top offset (group is at object center-ish)
 
   const isModel = (mesh.kind === 'meshy' || mesh.kind === 'stl') && mesh.modelUrl;
-  // ground rest height: half the object's (normalized) height — Y axis scale
-  const restY = mesh.kind === 'part' && mesh.size ? mesh.size[1] / 2
-    : mesh.kind === 'baked' ? (mesh.halfY || 0.5) * scaleArr(mesh.scale)[1]
-    : 0.5 * scaleArr(mesh.scale)[1];
 
   useFrame((st, dt) => {
-    // ---- gravity: while running, unattached objects fall to the ground ----
+    // ---- position: authored position + the unit's shared fall offset ----
     const root = rootRef.current;
     if (root) {
-      if (running && !mesh.attachedTo) {
-        if (root.position.y > restY + 1e-4 || vyRef.current !== 0) {
-          vyRef.current -= 9.8 * dt;
-          root.position.y += vyRef.current * dt;
-          if (root.position.y <= restY) {
-            root.position.y = restY;
-            // small bounce, then settle
-            vyRef.current = Math.abs(vyRef.current) > 1.4 ? -vyRef.current * 0.22 : 0;
-          }
-        }
-      } else if (!running) {
-        // paused/reset: return to the authored position
-        root.position.set(mesh.position[0], mesh.position[1], mesh.position[2]);
-        vyRef.current = 0;
-      }
+      const off = running && unitKey ? (fallRef?.current?.off?.[unitKey] ?? 0) : 0;
+      root.position.set(mesh.position[0], mesh.position[1] + off, mesh.position[2]);
     }
     const s = stateRef.current?.objects?.[mesh.id];
     const body = bodyRef.current;
@@ -410,6 +447,31 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
     return { renderMeshes: out };
   }, [meshes]);
 
+  // Rigid units for gravity. A "unit" is everything rigidly connected: members
+  // of the same group AND anything attached to them (an AI tire mounted on a
+  // hub falls with the chassis). Union-find over groupId + attachedTo.
+  const { units, unitOf } = useMemo(() => {
+    const parent = {};
+    const ensure = (x) => { if (parent[x] === undefined) parent[x] = x; return x; };
+    const find = (x) => { ensure(x); while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    const union = (a, b) => { parent[find(a)] = find(b); };
+    for (const m of renderMeshes) {
+      ensure(m.id);
+      if (m.groupId) union(m.id, 'g:' + m.groupId);
+      if (m.attachedTo) union(m.id, m.attachedTo);
+    }
+    const map = {};
+    const byRep = {};
+    for (const m of renderMeshes) {
+      const rep = find(m.id);
+      map[m.id] = rep;
+      (byRep[rep] = byRep[rep] || { id: rep, members: [] }).members.push(m);
+    }
+    return { units: Object.values(byRep), unitOf: map };
+  }, [renderMeshes]);
+  const fallRef = useRef({ off: {}, vy: {} });
+  if (import.meta.env?.DEV) { window.__fall = fallRef; window.__units = units; window.__unitOf = unitOf; }
+
   return (
     <Canvas shadows camera={{ position: [3, 2.2, 3.2], fov: 45 }} dpr={[1, 2]}>
       <color attach="background" args={[bg]} />
@@ -421,8 +483,19 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
       <ContactShadows position={[0, 0.001, 0]} opacity={theme === 'light' ? 0.35 : 0.55} scale={14} blur={2.4} far={6} resolution={1024} />
 
       {renderMeshes.map((m) => (
-        <SimMesh key={m.id} mesh={m} spinning={running && m.id in spinMeta} spinDir={spinMeta[m.id] || 1} stateRef={stateRef} materialKey={matByMesh[m.id]} running={running} />
+        <SimMesh
+          key={m.id}
+          mesh={m}
+          spinning={running && m.id in spinMeta}
+          spinDir={spinMeta[m.id] || 1}
+          stateRef={stateRef}
+          materialKey={matByMesh[m.id]}
+          running={running}
+          unitKey={unitOf[m.id]}
+          fallRef={fallRef}
+        />
       ))}
+      <GravityEngine units={units} running={running} fallRef={fallRef} />
       {hazards.map((h) => (
         <HazardMarker key={h.id} hazard={h} />
       ))}

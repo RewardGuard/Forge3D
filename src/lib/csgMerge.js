@@ -46,6 +46,8 @@ export function mergeMembersToBaked(members) {
   const positions = Array.from(flat.getAttribute('position').array);
   const normals = flat.getAttribute('normal') ? Array.from(flat.getAttribute('normal').array) : [];
   flat.computeBoundingBox();
-  const halfY = (flat.boundingBox.max.y - flat.boundingBox.min.y) / 2 || 0.5;
-  return { geom: { positions, normals }, center: [c.x, c.y, c.z], halfY };
+  const size = new THREE.Vector3();
+  flat.boundingBox.getSize(size);
+  const half = [size.x / 2 || 0.5, size.y / 2 || 0.5, size.z / 2 || 0.5];
+  return { geom: { positions, normals }, center: [c.x, c.y, c.z], halfY: half[1], half };
 }
