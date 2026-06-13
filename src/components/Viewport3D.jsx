@@ -10,7 +10,7 @@ import { Evaluator, Brush, ADDITION, SUBTRACTION } from 'three-bvh-csg';
 import { useStore } from '../lib/store.js';
 import { resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr, packScale } from '../lib/scaleUtil.js';
-import { makeGeometry, bakedGeometry } from '../lib/geometryFactory.js';
+import { makeGeometry, bakedGeometry, prepareBrushGeometry } from '../lib/geometryFactory.js';
 
 // PBR hints derived from the mesh's assigned physical material (metal vs not).
 function pbrFor(mesh) {
@@ -110,11 +110,12 @@ function CSGGroup({ members }) {
   const selectedIds = useStore((s) => s.selectedMeshIds);
   const primary = members.find((m) => !m.negative && csgable(m));
 
-  const depKey = JSON.stringify(members.map((m) => [m.id, m.kind, m.position, m.rotation, m.scale, m.negative, m.size]));
+  const depKey = JSON.stringify(members.map((m) => [m.id, m.kind, m.position, m.rotation, m.scale, m.negative, m.size, m.geom ? m.geom.positions.length : 0]));
   const geometry = useMemo(() => {
     const ev = new Evaluator();
+    ev.attributes = ['position', 'normal']; // must match prepareBrushGeometry
     const brushFor = (m) => {
-      const g = makeGeometry(m);
+      const g = prepareBrushGeometry(makeGeometry(m));
       const mat = new THREE.Matrix4().compose(
         new THREE.Vector3(...m.position),
         new THREE.Quaternion().setFromEuler(new THREE.Euler(...(m.rotation || [0, 0, 0]))),
@@ -142,7 +143,28 @@ function CSGGroup({ members }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [depKey]);
 
-  if (!geometry || !primary) return null;
+  // FALLBACK: if the boolean can't be computed (degenerate / re-cut edge case),
+  // render the csgable members individually so the object never disappears.
+  if (!geometry || !primary) {
+    return (
+      <>
+        {members.filter((m) => csgable(m) && !m.negative).map((m) => (
+          <mesh
+            key={m.id}
+            position={m.position}
+            rotation={m.rotation || [0, 0, 0]}
+            scale={scaleArr(m.scale)}
+            castShadow
+            receiveShadow
+            onClick={(e) => { e.stopPropagation(); selectMesh(m.id, e.nativeEvent?.metaKey || e.nativeEvent?.ctrlKey || e.nativeEvent?.shiftKey); }}
+          >
+            <PrimitiveGeometry mesh={m} />
+            <meshStandardMaterial color={m.color} metalness={0.08} roughness={0.62} envMapIntensity={0.9} />
+          </mesh>
+        ))}
+      </>
+    );
+  }
   const selected = selectedIds.includes(primary.id);
   const pbr = pbrFor(primary);
   return (
