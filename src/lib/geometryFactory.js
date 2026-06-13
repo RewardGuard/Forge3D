@@ -21,6 +21,18 @@ export function makeGeometry(mesh) {
   }
 }
 
+// three-bvh-csg requires every brush to share the SAME attribute set. Primitive
+// geometries carry position+normal+uv but a baked (already-merged) geometry only
+// has position+normal — mixing them makes the evaluator throw and the result
+// vanish. Strip every brush down to position+normal so they always match.
+export function prepareBrushGeometry(geo) {
+  for (const name of Object.keys(geo.attributes)) {
+    if (name !== 'position' && name !== 'normal') geo.deleteAttribute(name);
+  }
+  if (!geo.getAttribute('normal')) geo.computeVertexNormals();
+  return geo;
+}
+
 // Rebuild a BufferGeometry from the serialized arrays of a merged object.
 export function bakedGeometry(mesh) {
   const g = new THREE.BufferGeometry();

@@ -3,15 +3,16 @@
 // result behaves like any other mesh — select, transform, cut again, export.
 import * as THREE from 'three';
 import { Evaluator, Brush, ADDITION, SUBTRACTION } from 'three-bvh-csg';
-import { makeGeometry } from './geometryFactory.js';
+import { makeGeometry, prepareBrushGeometry } from './geometryFactory.js';
 import { scaleArr } from './scaleUtil.js';
 
 const canMerge = (m) => !((m.kind === 'meshy' || m.kind === 'stl') && m.modelUrl);
 
 export function mergeMembersToBaked(members) {
   const ev = new Evaluator();
+  ev.attributes = ['position', 'normal']; // all brushes share these (see prepareBrushGeometry)
   const brushFor = (m) => {
-    const g = makeGeometry(m);
+    const g = prepareBrushGeometry(makeGeometry(m));
     const mat = new THREE.Matrix4().compose(
       new THREE.Vector3(...m.position),
       new THREE.Quaternion().setFromEuler(new THREE.Euler(...(m.rotation || [0, 0, 0]))),
