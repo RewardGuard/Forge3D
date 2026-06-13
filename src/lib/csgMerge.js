@@ -39,12 +39,13 @@ export function mergeMembersToBaked(members) {
   const c = new THREE.Vector3();
   geo.boundingBox.getCenter(c);
   geo.translate(-c.x, -c.y, -c.z);
-  // keep the evaluator's normals — recomputing averages across the cut edges
-  // and produces dark/jagged shading on the carved surfaces
+  // CRITICAL: the evaluator's geometry is indexed — serializing the attributes
+  // without the index scrambles the triangles. Flatten to non-indexed first.
+  const flat = geo.index ? geo.toNonIndexed() : geo;
 
-  const positions = Array.from(geo.getAttribute('position').array);
-  const normals = geo.getAttribute('normal') ? Array.from(geo.getAttribute('normal').array) : [];
-  geo.computeBoundingBox();
-  const halfY = (geo.boundingBox.max.y - geo.boundingBox.min.y) / 2 || 0.5;
+  const positions = Array.from(flat.getAttribute('position').array);
+  const normals = flat.getAttribute('normal') ? Array.from(flat.getAttribute('normal').array) : [];
+  flat.computeBoundingBox();
+  const halfY = (flat.boundingBox.max.y - flat.boundingBox.min.y) / 2 || 0.5;
   return { geom: { positions, normals }, center: [c.x, c.y, c.z], halfY };
 }
