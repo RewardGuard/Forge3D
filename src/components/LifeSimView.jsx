@@ -6,6 +6,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { useStore } from '../lib/store.js';
 import { initLifeState, stepLifeState, glowColor, tempColor, HAZARDS, resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr } from '../lib/scaleUtil.js';
+import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 // Loads a remote GLB (Meshy) — centered + normalized to ~1 unit so the sim's
 // melt/scale deformation behaves the same as for primitives.
@@ -96,12 +97,6 @@ const SMOKE_N = 6;
 
 const INPUT_KINDS = new Set(['push-button', 'toggle-switch', 'potentiometer', 'joystick']);
 
-// Spin axis that makes mechanical sense per shape: a torus/knot tire rolls
-// around its central (local Z) axis; cylinders/discs around local Y; the rest
-// default to Y. The user's own rotation (e.g. standing a tire upright) is on
-// the parent group, so the local axis stays the true axle.
-const SPIN_AXIS = { torus: 'z', torusknot: 'z' };
-
 function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }) {
   const setInput = useStore((s) => s.setInput);
   const toggleInput = useStore((s) => s.toggleInput);
@@ -127,6 +122,7 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }
   const bodyRef = useRef();
   const rootRef = useRef();
   const vyRef = useRef(0); // vertical velocity for gravity
+  const axleRef = useRef(null); // detected spin axis ('x'|'y'|'z') + child count
   const matsRef = useRef(null); // [{ mat, base }] gathered from the body subtree
   const fireRef = useRef();
   const lightRef = useRef();
@@ -163,7 +159,27 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }
     const s = stateRef.current?.objects?.[mesh.id];
     const body = bodyRef.current;
     if (!body) return;
-    if (spinning && (!s || !s.destroyed)) body.rotation[SPIN_AXIS[mesh.kind] || 'y'] += dt * 6 * spinDir;
+    // ---- spin axis: a wheel's axle is its THINNEST direction (works for
+    // torus tires, coin cylinders and AI-generated tire models alike) ----
+    if (spinning && (!s || !s.destroyed)) {
+      const childCount = body.children.length;
+      if (!axleRef.current || axleRef.current.children !== childCount) {
+        const bb = new THREE.Box3().setFromObject(body);
+        const ws = new THREE.Vector3();
+        bb.getSize(ws);
+        if (ws.x > 0 && ws.y > 0 && ws.z > 0) {
+          // thinnest WORLD direction → express it in the body's local frame
+          const dir = ws.x <= ws.y && ws.x <= ws.z ? new THREE.Vector3(1, 0, 0)
+            : ws.y <= ws.z ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+          const q = body.getWorldQuaternion(new THREE.Quaternion()).invert();
+          dir.applyQuaternion(q);
+          const ax = Math.abs(dir.x) >= Math.abs(dir.y) && Math.abs(dir.x) >= Math.abs(dir.z) ? 'x'
+            : Math.abs(dir.y) >= Math.abs(dir.z) ? 'y' : 'z';
+          axleRef.current = { axis: ax, children: childCount };
+        }
+      }
+      body.rotation[axleRef.current?.axis || 'y'] += dt * 6 * spinDir;
+    }
 
     if (!s) return;
 
@@ -240,13 +256,19 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }
   });
 
   const fallbackBody = (
-    <mesh castShadow receiveShadow>
+    <mesh castShadow={!mesh.negative} receiveShadow>
       {geometryFor(mesh)}
-      <meshStandardMaterial
-        color={mesh.color}
-        metalness={materialKey?.metal ? 0.85 : 0.15}
-        roughness={materialKey?.metal ? 0.35 : 0.65}
-      />
+      {mesh.negative ? (
+        // an ungrouped negative is a cutting tool, not a physical object
+        <meshStandardMaterial color="#ef4444" transparent opacity={0.3} depthWrite={false} />
+      ) : (
+        <meshStandardMaterial
+          color={mesh.color}
+          metalness={materialKey?.metal ? 0.85 : 0.15}
+          roughness={materialKey?.metal ? 0.35 : 0.65}
+          side={mesh.kind === 'baked' ? THREE.DoubleSide : THREE.FrontSide}
+        />
+      )}
     </mesh>
   );
 
@@ -355,6 +377,39 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
     return map;
   }, [meshes]);
 
+  // Groups render as ONE carved body here too (same boolean result as the 3D
+  // editor) — negatives become holes instead of solid boxes. The merged body
+  // inherits the primary member's id so heat state & attachments still work.
+  const { renderMeshes } = useMemo(() => {
+    const canCsg = (m) => !((m.kind === 'meshy' || m.kind === 'stl') && m.modelUrl);
+    const groups = {};
+    const out = [];
+    for (const m of meshes) {
+      if (m.groupId && canCsg(m)) (groups[m.groupId] = groups[m.groupId] || []).push(m);
+      else out.push(m);
+    }
+    for (const members of Object.values(groups)) {
+      const primary = members.find((m) => !m.negative) || members[0];
+      try {
+        const baked = mergeMembersToBaked(members);
+        if (baked) {
+          out.push({
+            ...primary,
+            kind: 'baked',
+            geom: baked.geom,
+            halfY: baked.halfY,
+            position: baked.center,
+            rotation: [0, 0, 0],
+            scale: 1,
+          });
+          continue;
+        }
+      } catch { /* degenerate CSG — fall through to raw members */ }
+      out.push(...members);
+    }
+    return { renderMeshes: out };
+  }, [meshes]);
+
   return (
     <Canvas shadows camera={{ position: [3, 2.2, 3.2], fov: 45 }} dpr={[1, 2]}>
       <color attach="background" args={[bg]} />
@@ -365,7 +420,7 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
       <Grid args={[24, 24]} cellSize={0.1} cellColor="#1c2530" sectionSize={1} sectionColor="#2a3a4d" fadeDistance={20} infiniteGrid />
       <ContactShadows position={[0, 0.001, 0]} opacity={theme === 'light' ? 0.35 : 0.55} scale={14} blur={2.4} far={6} resolution={1024} />
 
-      {meshes.map((m) => (
+      {renderMeshes.map((m) => (
         <SimMesh key={m.id} mesh={m} spinning={running && m.id in spinMeta} spinDir={spinMeta[m.id] || 1} stateRef={stateRef} materialKey={matByMesh[m.id]} running={running} />
       ))}
       {hazards.map((h) => (

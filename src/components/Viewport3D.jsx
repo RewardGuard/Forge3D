@@ -297,10 +297,7 @@ function MeshItem({ mesh, ghost = false }) {
             metalness={pbr.metalness}
             roughness={pbr.roughness}
             envMapIntensity={0.9}
-            // CSG cut surfaces can have flipped slivers at the rim — render
-            // both faces and shade flat so merged objects look solid
             side={mesh.kind === 'baked' ? THREE.DoubleSide : THREE.FrontSide}
-            flatShading={mesh.kind === 'baked'}
           />
         )}
       </mesh>
