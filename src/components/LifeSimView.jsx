@@ -1,6 +1,6 @@
 import React, { useRef, useMemo, useEffect, Suspense } from 'react';
 import * as THREE from 'three';
-import { Canvas, useFrame, useLoader } from '@react-three/fiber';
+import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment, ContactShadows, Html, useGLTF } from '@react-three/drei';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { useStore } from '../lib/store.js';
@@ -106,47 +106,60 @@ function halfExtents(m) {
   return [0.5 * s[0], 0.5 * s[1], 0.5 * s[2]];
 }
 
-// Rigid-unit gravity with stacking collisions. A "unit" is a whole group (or a
-// single ungrouped mesh): it falls as ONE body and rests on the ground OR on
-// top of other units (AABB overlap) — parts no longer sink through the chassis.
+// Rigid-unit gravity with REAL geometry collisions (raycast). Each unit falls
+// as one body and rests on whatever surface is actually below its footprint —
+// so a part drops INTO a carved socket instead of stopping on the bounding box.
+const DOWN = new THREE.Vector3(0, -1, 0);
 function GravityEngine({ units, running, fallRef }) {
+  const { scene } = useThree();
+  const rc = useRef(new THREE.Raycaster());
+
   useFrame((_, dtRaw) => {
     const S = fallRef.current;
-    if (!running) { S.off = {}; S.vy = {}; return; }
+    if (!running) { S.off = {}; S.vy = {}; S.rest = {}; return; }
+    if (!S.rest) S.rest = {};
     const dt = Math.min(0.05, dtRaw);
-    // current AABB of each unit (members move together by the unit offset)
-    const boxes = units.map((u) => {
+
+    // collidable rendered bodies (non-negative); raycasting hits real triangles,
+    // so holes are respected. Excludes a unit's own meshes per-cast below.
+    const targets = [];
+    scene.traverse((o) => { if (o.userData?.collidable && o.userData.unitKey) targets.push(o); });
+
+    for (const u of units) {
+      if (S.rest[u.id]) continue; // already settled — skip (cheap steady state)
       const off = S.off[u.id] ?? 0;
-      let minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
+      let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9, bottom = 1e9;
       for (const m of u.members) {
         const h = halfExtents(m);
         minX = Math.min(minX, m.position[0] - h[0]); maxX = Math.max(maxX, m.position[0] + h[0]);
-        minY = Math.min(minY, m.position[1] + off - h[1]); maxY = Math.max(maxY, m.position[1] + off + h[1]);
         minZ = Math.min(minZ, m.position[2] - h[2]); maxZ = Math.max(maxZ, m.position[2] + h[2]);
+        bottom = Math.min(bottom, m.position[1] + off - h[1]);
       }
-      return { u, minX, maxX, minY, maxY, minZ, maxZ };
-    });
-    // settle lowest-first so stacks resolve bottom-up
-    boxes.sort((a, b) => a.minY - b.minY);
-    const settled = [];
-    for (const b of boxes) {
-      let vy = (S.vy[b.u.id] ?? 0) - 9.8 * dt;
-      let dy = vy * dt;
-      // rest height: ground, or the top of any unit we overlap in XZ and sit above
+      const others = targets.filter((g) => g.userData.unitKey !== u.id);
+      const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+      const ex = (maxX - minX) / 2 - 0.02, ez = (maxZ - minZ) / 2 - 0.02;
+      const samples = [[cx, cz], [cx - ex, cz - ez], [cx + ex, cz - ez], [cx - ex, cz + ez], [cx + ex, cz + ez]];
+
+      // highest support surface directly under the footprint (ground = 0)
       let restAt = 0;
-      for (const d of settled) {
-        const xo = b.minX < d.maxX && b.maxX > d.minX;
-        const zo = b.minZ < d.maxZ && b.maxZ > d.minZ;
-        if (xo && zo && b.minY >= d.maxY - 0.03) restAt = Math.max(restAt, d.maxY);
+      for (const [px, pz] of samples) {
+        rc.current.set(new THREE.Vector3(px, bottom + 6, pz), DOWN);
+        rc.current.far = 1000;
+        const hits = rc.current.intersectObjects(others, true);
+        for (const hit of hits) {
+          if (hit.point.y <= bottom + 0.02) { restAt = Math.max(restAt, hit.point.y); break; }
+        }
       }
-      if (b.minY + dy <= restAt + 1e-4 && vy <= 0) {
-        dy = restAt - b.minY; // land exactly on the surface and stop
+
+      let vy = (S.vy[u.id] ?? 0) - 9.8 * dt;
+      let dy = vy * dt;
+      if (bottom + dy <= restAt + 1e-3 && vy <= 0) {
+        dy = restAt - bottom; // land exactly on the real surface
         vy = 0;
+        S.rest[u.id] = true;
       }
-      S.off[b.u.id] = (S.off[b.u.id] ?? 0) + dy;
-      S.vy[b.u.id] = vy;
-      b.minY += dy; b.maxY += dy;
-      settled.push(b);
+      S.off[u.id] = off + dy;
+      S.vy[u.id] = vy;
     }
   });
   return null;
@@ -310,7 +323,13 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running, 
   );
 
   return (
-    <group ref={rootRef} position={mesh.position} rotation={mesh.rotation || [0, 0, 0]} {...inputHandlers}>
+    <group
+      ref={rootRef}
+      position={mesh.position}
+      rotation={mesh.rotation || [0, 0, 0]}
+      userData={{ unitKey: unitKey || null, collidable: !mesh.negative && unitKey != null }}
+      {...inputHandlers}
+    >
       <group ref={bodyRef} scale={scaleArr(mesh.scale)}>
         {isModel ? (
           <BodyErrorBoundary fallback={fallbackBody}>
@@ -474,7 +493,6 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
     return { units: Object.values(byRep), unitOf: map };
   }, [renderMeshes]);
   const fallRef = useRef({ off: {}, vy: {} });
-  if (import.meta.env?.DEV) { window.__fall = fallRef; window.__units = units; window.__unitOf = unitOf; }
 
   return (
     <Canvas shadows camera={{ position: [3, 2.2, 3.2], fov: 45 }} dpr={[1, 2]}>
