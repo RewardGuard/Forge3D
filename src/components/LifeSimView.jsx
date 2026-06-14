@@ -1,66 +1,59 @@
-import React, { useRef, useMemo, useEffect, Suspense } from 'react';
+import React, { useRef, useMemo, useEffect, useState } from 'react';
 import * as THREE from 'three';
-import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
-import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment, ContactShadows, Html, useGLTF } from '@react-three/drei';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment, ContactShadows, Html } from '@react-three/drei';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { useStore } from '../lib/store.js';
 import { initLifeState, stepLifeState, glowColor, tempColor, HAZARDS, resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr } from '../lib/scaleUtil.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
-// Loads a remote GLB (Meshy) — centered + normalized to ~1 unit so the sim's
-// melt/scale deformation behaves the same as for primitives.
-function GLBBody({ mesh, metal }) {
-  const { scene } = useGLTF(mesh.modelUrl);
-  const cloned = useMemo(() => {
-    const c = scene.clone(true);
-    const box = new THREE.Box3().setFromObject(c);
-    const size = new THREE.Vector3();
-    const center = new THREE.Vector3();
-    box.getSize(size);
-    box.getCenter(center);
-    const longest = Math.max(size.x, size.y, size.z) || 1;
-    const wrap = new THREE.Group();
-    c.position.set(-center.x, -center.y, -center.z);
-    // clone materials so per-object tint/glow doesn't leak across instances
-    c.traverse((o) => {
-      if (o.isMesh) {
-        o.castShadow = true; o.receiveShadow = true;
-        o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone();
-      }
-    });
-    wrap.add(c);
-    wrap.scale.setScalar(1 / longest);
-    return wrap;
-  }, [scene]);
-  return <primitive object={cloned} />;
-}
-
-// Loads a remote/local STL (Thingiverse), centered + normalized to ~1 unit.
-function STLBody({ mesh, metal }) {
-  const geometry = useLoader(STLLoader, mesh.modelUrl);
-  const geo = useMemo(() => {
-    const g = geometry.clone();
-    g.computeBoundingBox();
-    const b = g.boundingBox;
-    g.translate(-(b.max.x + b.min.x) / 2, -(b.max.y + b.min.y) / 2, -(b.max.z + b.min.z) / 2);
-    g.computeVertexNormals();
-    const size = Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) || 1;
-    g.scale(1 / size, 1 / size, 1 / size);
-    return g;
-  }, [geometry]);
-  return (
-    <mesh geometry={geo} castShadow receiveShadow>
-      <meshStandardMaterial color={mesh.color || '#9aa7bd'} metalness={metal ? 0.85 : 0.15} roughness={metal ? 0.35 : 0.65} />
-    </mesh>
-  );
-}
-
-// Error boundary so a failed model load falls back to a primitive box.
-class BodyErrorBoundary extends React.Component {
-  constructor(p) { super(p); this.state = { failed: false }; }
-  static getDerivedStateFromError() { return { failed: true }; }
-  render() { return this.state.failed ? this.props.fallback : this.props.children; }
+// Imperative model loader — NEVER suspends, so a slow/dead model URL can't
+// freeze the whole Life Sim render loop (gravity, heat, everything). Returns a
+// ready THREE.Object3D (centered, normalized to ~1 unit) or null while loading
+// / on failure (a 10s timeout converts a hang into a fallback).
+function useLoadedModel(mesh) {
+  const [obj, setObj] = useState(null);
+  const url = mesh.modelUrl;
+  const kind = mesh.kind;
+  useEffect(() => {
+    if (!url) { setObj(null); return; }
+    let done = false;
+    setObj(null);
+    const finish = (o) => { if (!done) { done = true; setObj(o); } };
+    const timer = setTimeout(() => finish(null), 10000); // hang -> fallback
+    if (kind === 'meshy') {
+      new GLTFLoader().load(url, (gltf) => {
+        clearTimeout(timer);
+        const c = gltf.scene;
+        const box = new THREE.Box3().setFromObject(c);
+        const size = new THREE.Vector3(); const center = new THREE.Vector3();
+        box.getSize(size); box.getCenter(center);
+        const longest = Math.max(size.x, size.y, size.z) || 1;
+        c.position.set(-center.x, -center.y, -center.z);
+        c.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone(); } });
+        const wrap = new THREE.Group(); wrap.add(c); wrap.scale.setScalar(1 / longest);
+        finish(wrap);
+      }, undefined, () => { clearTimeout(timer); finish(null); });
+    } else {
+      new STLLoader().load(url, (g) => {
+        clearTimeout(timer);
+        g.computeBoundingBox();
+        const b = g.boundingBox;
+        g.translate(-(b.max.x + b.min.x) / 2, -(b.max.y + b.min.y) / 2, -(b.max.z + b.min.z) / 2);
+        g.computeVertexNormals();
+        const size = Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) || 1;
+        g.scale(1 / size, 1 / size, 1 / size);
+        const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: mesh.color || '#9aa7bd' }));
+        m.castShadow = true; m.receiveShadow = true;
+        finish(m);
+      }, undefined, () => { clearTimeout(timer); finish(null); });
+    }
+    return () => { done = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, kind]);
+  return obj;
 }
 
 function BakedGeom({ mesh }) {
@@ -120,7 +113,6 @@ function GravityEngine({ units, running, fallRef }) {
         (rootsByUnit[o.userData.unitKey] = rootsByUnit[o.userData.unitKey] || []).push(o);
       }
     });
-
     for (const u of units) {
       if (S.rest[u.id]) continue; // already settled — cheap steady state
       const roots = rootsByUnit[u.id];
@@ -200,6 +192,7 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running, 
   const top = useMemo(() => 0.55, []); // local top offset (group is at object center-ish)
 
   const isModel = (mesh.kind === 'meshy' || mesh.kind === 'stl') && mesh.modelUrl;
+  const loadedModel = useLoadedModel(mesh); // null until loaded / on failure — never suspends
 
   useFrame((st, dt) => {
     // ---- position: authored position + the unit's shared fall offset ----
@@ -333,15 +326,7 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running, 
       {...inputHandlers}
     >
       <group ref={bodyRef} scale={scaleArr(mesh.scale)}>
-        {isModel ? (
-          <BodyErrorBoundary fallback={fallbackBody}>
-            <Suspense fallback={fallbackBody}>
-              {mesh.kind === 'meshy'
-                ? <GLBBody mesh={mesh} metal={materialKey?.metal} />
-                : <STLBody mesh={mesh} metal={materialKey?.metal} />}
-            </Suspense>
-          </BodyErrorBoundary>
-        ) : fallbackBody}
+        {isModel && loadedModel ? <primitive object={loadedModel} /> : fallbackBody}
       </group>
 
       <group ref={fireRef} visible={false}>
