@@ -97,22 +97,15 @@ const SMOKE_N = 6;
 
 const INPUT_KINDS = new Set(['push-button', 'toggle-switch', 'potentiometer', 'joystick']);
 
-// half-extents of a mesh's AABB in world units (approximate, axis-aligned)
-function halfExtents(m) {
-  if (m.kind === 'part' && Array.isArray(m.size)) return [m.size[0] / 2, m.size[1] / 2, m.size[2] / 2];
-  const s = scaleArr(m.scale);
-  if (m.kind === 'baked' && Array.isArray(m.half)) return [m.half[0] * s[0], m.half[1] * s[1], m.half[2] * s[2]];
-  if (m.kind === 'baked') return [0.5 * s[0], (m.halfY ?? 0.5) * s[1], 0.5 * s[2]];
-  return [0.5 * s[0], 0.5 * s[1], 0.5 * s[2]];
-}
-
-// Rigid-unit gravity with REAL geometry collisions (raycast). Each unit falls
-// as one body and rests on whatever surface is actually below its footprint —
-// so a part drops INTO a carved socket instead of stopping on the bounding box.
+// Rigid-unit gravity with REAL geometry collisions. Both the falling object's
+// bottom AND the surface it lands on come from the ACTUAL rendered meshes
+// (world bounding box + downward raycasts) — no AABB approximations, so a
+// loaded tire model never sinks and parts drop into carved sockets.
 const DOWN = new THREE.Vector3(0, -1, 0);
 function GravityEngine({ units, running, fallRef }) {
   const { scene } = useThree();
   const rc = useRef(new THREE.Raycaster());
+  const box = useRef(new THREE.Box3());
 
   useFrame((_, dtRaw) => {
     const S = fallRef.current;
@@ -120,30 +113,39 @@ function GravityEngine({ units, running, fallRef }) {
     if (!S.rest) S.rest = {};
     const dt = Math.min(0.05, dtRaw);
 
-    // collidable rendered bodies (non-negative); raycasting hits real triangles,
-    // so holes are respected. Excludes a unit's own meshes per-cast below.
-    const targets = [];
-    scene.traverse((o) => { if (o.userData?.collidable && o.userData.unitKey) targets.push(o); });
+    // unit root groups currently in the scene, by unit id
+    const rootsByUnit = {};
+    scene.traverse((o) => {
+      if (o.userData?.isUnitRoot && o.userData.collidable && o.userData.unitKey) {
+        (rootsByUnit[o.userData.unitKey] = rootsByUnit[o.userData.unitKey] || []).push(o);
+      }
+    });
 
     for (const u of units) {
-      if (S.rest[u.id]) continue; // already settled — skip (cheap steady state)
-      const off = S.off[u.id] ?? 0;
-      let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9, bottom = 1e9;
-      for (const m of u.members) {
-        const h = halfExtents(m);
-        minX = Math.min(minX, m.position[0] - h[0]); maxX = Math.max(maxX, m.position[0] + h[0]);
-        minZ = Math.min(minZ, m.position[2] - h[2]); maxZ = Math.max(maxZ, m.position[2] + h[2]);
-        bottom = Math.min(bottom, m.position[1] + off - h[1]);
-      }
-      const others = targets.filter((g) => g.userData.unitKey !== u.id);
-      const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-      const ex = (maxX - minX) / 2 - 0.02, ez = (maxZ - minZ) / 2 - 0.02;
+      if (S.rest[u.id]) continue; // already settled — cheap steady state
+      const roots = rootsByUnit[u.id];
+      if (!roots || !roots.length) continue;
+
+      // TRUE current world AABB of the whole unit (all its meshes)
+      const b = box.current.makeEmpty();
+      for (const g of roots) b.expandByObject(g);
+      if (b.isEmpty()) continue;
+      const bottom = b.min.y;
+      const cx = (b.min.x + b.max.x) / 2, cz = (b.min.z + b.max.z) / 2;
+      const ex = Math.max(0, (b.max.x - b.min.x) / 2 - 0.03);
+      const ez = Math.max(0, (b.max.z - b.min.z) / 2 - 0.03);
       const samples = [[cx, cz], [cx - ex, cz - ez], [cx + ex, cz - ez], [cx - ex, cz + ez], [cx + ex, cz + ez]];
 
-      // highest support surface directly under the footprint (ground = 0)
+      // everything collidable that isn't this unit
+      const others = [];
+      scene.traverse((o) => {
+        if (o.userData?.isUnitRoot && o.userData.collidable && o.userData.unitKey && o.userData.unitKey !== u.id) others.push(o);
+      });
+
+      // highest real surface under the footprint (ground = 0)
       let restAt = 0;
       for (const [px, pz] of samples) {
-        rc.current.set(new THREE.Vector3(px, bottom + 6, pz), DOWN);
+        rc.current.set(new THREE.Vector3(px, bottom + 8, pz), DOWN);
         rc.current.far = 1000;
         const hits = rc.current.intersectObjects(others, true);
         for (const hit of hits) {
@@ -158,7 +160,7 @@ function GravityEngine({ units, running, fallRef }) {
         vy = 0;
         S.rest[u.id] = true;
       }
-      S.off[u.id] = off + dy;
+      S.off[u.id] = (S.off[u.id] ?? 0) + dy;
       S.vy[u.id] = vy;
     }
   });
@@ -327,7 +329,7 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running, 
       ref={rootRef}
       position={mesh.position}
       rotation={mesh.rotation || [0, 0, 0]}
-      userData={{ unitKey: unitKey || null, collidable: !mesh.negative && unitKey != null }}
+      userData={{ unitKey: unitKey || null, collidable: !mesh.negative && unitKey != null, isUnitRoot: true }}
       {...inputHandlers}
     >
       <group ref={bodyRef} scale={scaleArr(mesh.scale)}>
