@@ -451,18 +451,22 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
   // of the same group AND anything attached to them (an AI tire mounted on a
   // hub falls with the chassis). Union-find over groupId + attachedTo.
   const { units, unitOf } = useMemo(() => {
+    // negative objects are cutting tools, not physical bodies — they don't fall
+    // or collide. (Grouped negatives are already baked into holes; this excludes
+    // any stray ungrouped negative.)
+    const physical = renderMeshes.filter((m) => !m.negative);
     const parent = {};
     const ensure = (x) => { if (parent[x] === undefined) parent[x] = x; return x; };
     const find = (x) => { ensure(x); while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
     const union = (a, b) => { parent[find(a)] = find(b); };
-    for (const m of renderMeshes) {
+    for (const m of physical) {
       ensure(m.id);
       if (m.groupId) union(m.id, 'g:' + m.groupId);
       if (m.attachedTo) union(m.id, m.attachedTo);
     }
     const map = {};
     const byRep = {};
-    for (const m of renderMeshes) {
+    for (const m of physical) {
       const rep = find(m.id);
       map[m.id] = rep;
       (byRep[rep] = byRep[rep] || { id: rep, members: [] }).members.push(m);
