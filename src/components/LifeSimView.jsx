@@ -8,6 +8,7 @@ import { useStore } from '../lib/store.js';
 import { initLifeState, stepLifeState, glowColor, tempColor, HAZARDS, resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr } from '../lib/scaleUtil.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
+import { simulate } from '../lib/simulate.js';
 
 // Imperative model loader — NEVER suspends, so a slow/dead model URL can't
 // freeze the whole Life Sim render loop (gravity, heat, everything). Returns a
@@ -392,27 +393,55 @@ function Engine({ running, hazards, onReport, stateRef, resetSignal, drivenIds }
 export default function LifeSimView({ running, hazards, theme, onReport, resetSignal }) {
   const meshes = useStore((s) => s.meshes);
   const light = useStore((s) => s.lightLevel);
+  // circuit state — so a motor only spins when its driver is actually powered
+  const nodes = useStore((s) => s.nodes);
+  const wires = useStore((s) => s.wires);
+  const codeByNode = useStore((s) => s.codeByNode);
+  const inputs = useStore((s) => s.inputs);
+  const simTick = useStore((s) => s.simTick);
   const stateRef = useRef(null);
   const bg = theme === 'light' ? '#dfe5ec' : '#0e1116';
 
+  // Run the real electrical simulation (powered nets, code, L298N direction,
+  // joystick/button inputs) so the Life Sim reflects the actual circuit.
+  const circuit = useMemo(
+    () => (nodes.length ? simulate(nodes, wires, { codeByNode, blinkPhase: simTick % 2 === 0, inputs }) : null),
+    [nodes, wires, codeByNode, inputs, simTick]
+  );
+
   const spinMeta = useMemo(() => {
     // The MOTOR drives the OTHER object, regardless of which side the user
-    // attached. Each target gets a direction (+1/−1, flippable in Inspector).
+    // attached. A target only spins when its driver motor is electrically
+    // ACTIVE, in the circuit-determined direction (× a manual reverse toggle).
     const MOTORISH = new Set(['dc-motor', 'servo-sg90', 'servo-mg996', 'stepper-28byj', 'stepper-nema17', 'vibration-motor', 'pump-12v', 'linear-actuator']);
     const isMotor = (m) => !!m && MOTORISH.has(m.partId);
     const byId = Object.fromEntries(meshes.map((m) => [m.id, m]));
+    const compByNode = {};
+    if (circuit) for (const c of circuit.components) compByNode[c.nodeId] = c;
+    // a projected part mesh is "part-<nodeId>"; map it back to its circuit node
+    const motorPower = (motorMesh) => {
+      const nodeId = String(motorMesh.id).replace(/^part-/, '');
+      const c = compByNode[nodeId];
+      if (c) return { active: c.active, dir: c.dir || 1 };  // wired -> use circuit
+      return { active: !circuit, dir: 1 }; // no circuit at all -> demo spin; wired-but-not-found -> off
+    };
     const map = {}; // target id -> dir
     for (const m of meshes) {
       if (!m.attachedTo || m.drives === false) continue;
       const parent = byId[m.attachedTo];
       if (!parent) continue;
+      const motor = isMotor(m) ? m : isMotor(parent) ? parent : null;
       const target = isMotor(m) && !isMotor(parent) ? parent
         : isMotor(parent) && !isMotor(m) ? m
-        : parent; // neither/both motors: keep old behavior
-      map[target.id] = m.spinReverse || parent.spinReverse ? -1 : 1;
+        : parent;
+      const rev = (m.spinReverse || parent.spinReverse) ? -1 : 1;
+      if (!motor) { map[target.id] = rev; continue; } // no motor in pair — old demo behavior
+      const p = motorPower(motor);
+      if (!p.active) continue;               // motor not powered -> do not spin
+      map[target.id] = p.dir * rev;          // powered -> spin in circuit direction
     }
     return map;
-  }, [meshes]);
+  }, [meshes, circuit]);
 
   const matByMesh = useMemo(() => {
     const map = {};
