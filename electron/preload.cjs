@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('forge', {
     setGroqKey: (key) => ipcRenderer.invoke('config:setGroqKey', key),
     setMistralKey: (key) => ipcRenderer.invoke('config:setMistralKey', key),
     setOpenrouterKey: (key) => ipcRenderer.invoke('config:setOpenrouterKey', key),
+    setGlmKey: (key) => ipcRenderer.invoke('config:setGlmKey', key),
     setProvider: (provider) => ipcRenderer.invoke('config:setProvider', provider),
     setCodeProvider: (provider) => ipcRenderer.invoke('config:setCodeProvider', provider),
     setCircuitProvider: (provider) => ipcRenderer.invoke('config:setCircuitProvider', provider),

@@ -38,6 +38,7 @@ export default function SettingsButton() {
   const hasGroqKey = useStore((s) => s.hasGroqKey);
   const hasMistralKey = useStore((s) => s.hasMistralKey);
   const hasOpenrouterKey = useStore((s) => s.hasOpenrouterKey);
+  const hasGlmKey = useStore((s) => s.hasGlmKey);
   const exportQuality = useStore((s) => s.exportQuality);
   const uiZoom = useStore((s) => s.uiZoom);
   const setUiZoom = useStore((s) => s.setUiZoom);
@@ -56,6 +57,7 @@ export default function SettingsButton() {
   const setHasGroqKey = useStore((s) => s.setHasGroqKey);
   const setHasMistralKey = useStore((s) => s.setHasMistralKey);
   const setHasOpenrouterKey = useStore((s) => s.setHasOpenrouterKey);
+  const setHasGlmKey = useStore((s) => s.setHasGlmKey);
   const setExportQuality = useStore((s) => s.setExportQuality);
 
   // --- code (AI) providers, data-driven ---
@@ -83,6 +85,12 @@ export default function SettingsButton() {
       placeholder: 'sk-or-…', url: 'https://openrouter.ai/keys', urlLabel: 'openrouter.ai',
       note: 'One key, many models — several are completely free.',
       has: hasOpenrouterKey, setHas: setHasOpenrouterKey, save: (k) => window.forge.config.setOpenrouterKey(k), resKey: 'hasOpenrouterKey',
+    },
+    {
+      id: 'glm', name: 'GLM (Zhipu)', tag: 'FREE', model: 'GLM-4-Flash',
+      placeholder: 'glm key…', url: 'https://open.bigmodel.cn/usercenter/apikeys', urlLabel: 'bigmodel.cn',
+      note: 'Zhipu GLM — GLM-4-Flash is free. Strong at code. Paste your API key below.',
+      has: hasGlmKey, setHas: setHasGlmKey, save: (k) => window.forge.config.setGlmKey(k), resKey: 'hasGlmKey',
     },
     {
       id: 'anthropic', name: 'Claude', tag: 'PAID', model: 'Sonnet',

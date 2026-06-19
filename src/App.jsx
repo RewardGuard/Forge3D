@@ -19,7 +19,7 @@ const TABS = [
 // renderer also runs under plain `vite` for quick iteration.
 const browserFallback = {
   config: {
-    get: async () => ({ hasMeshyKey: false, hasHfToken: false, hasThingiverseToken: false, hasAnthropicKey: false, hasGeminiKey: false, hasGroqKey: false, hasMistralKey: false, hasOpenrouterKey: false, provider: 'mock', codeProvider: 'mock', circuitProvider: 'mock' }),
+    get: async () => ({ hasMeshyKey: false, hasHfToken: false, hasThingiverseToken: false, hasAnthropicKey: false, hasGeminiKey: false, hasGroqKey: false, hasMistralKey: false, hasOpenrouterKey: false, hasGlmKey: false, provider: 'mock', codeProvider: 'mock', circuitProvider: 'mock' }),
     setMeshyKey: async () => ({ hasMeshyKey: false }),
     setHfToken: async () => ({ hasHfToken: false }),
     setThingiverseToken: async () => ({ hasThingiverseToken: false }),
@@ -28,6 +28,7 @@ const browserFallback = {
     setGroqKey: async () => ({ hasGroqKey: false }),
     setMistralKey: async () => ({ hasMistralKey: false }),
     setOpenrouterKey: async () => ({ hasOpenrouterKey: false }),
+    setGlmKey: async () => ({ hasGlmKey: false }),
     setProvider: async (provider) => ({ provider }),
     setCodeProvider: async (codeProvider) => ({ codeProvider }),
     setCircuitProvider: async (circuitProvider) => ({ circuitProvider }),
@@ -145,6 +146,7 @@ export default function App() {
   const setHasGroqKey = useStore((s) => s.setHasGroqKey);
   const setHasMistralKey = useStore((s) => s.setHasMistralKey);
   const setHasOpenrouterKey = useStore((s) => s.setHasOpenrouterKey);
+  const setHasGlmKey = useStore((s) => s.setHasGlmKey);
   const setProvider = useStore((s) => s.setProvider);
   const setCodeProvider = useStore((s) => s.setCodeProvider);
   const setCircuitProvider = useStore((s) => s.setCircuitProvider);
@@ -160,11 +162,12 @@ export default function App() {
       setHasGroqKey(Boolean(c.hasGroqKey));
       setHasMistralKey(Boolean(c.hasMistralKey));
       setHasOpenrouterKey(Boolean(c.hasOpenrouterKey));
+      setHasGlmKey(Boolean(c.hasGlmKey));
       setProvider(c.provider || 'mock');
       setCodeProvider(c.codeProvider || 'mock');
       setCircuitProvider(c.circuitProvider || c.codeProvider || 'mock');
     });
-  }, [setHasMeshyKey, setHasHfToken, setHasThingiverseToken, setHasAnthropicKey, setHasGeminiKey, setHasGroqKey, setHasMistralKey, setHasOpenrouterKey, setProvider, setCodeProvider, setCircuitProvider]);
+  }, [setHasMeshyKey, setHasHfToken, setHasThingiverseToken, setHasAnthropicKey, setHasGeminiKey, setHasGroqKey, setHasMistralKey, setHasOpenrouterKey, setHasGlmKey, setProvider, setCodeProvider, setCircuitProvider]);
 
   // reflect theme on the root element so CSS variables switch
   useEffect(() => {

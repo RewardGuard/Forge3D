@@ -85,6 +85,8 @@ export const useStore = create((set, get) => ({
   setHasMistralKey: (v) => set({ hasMistralKey: v }),
   hasOpenrouterKey: false,
   setHasOpenrouterKey: (v) => set({ hasOpenrouterKey: v }),
+  hasGlmKey: false,
+  setHasGlmKey: (v) => set({ hasGlmKey: v }),
   codeByNode: {}, // nodeId -> Arduino sketch string
   setNodeCode: (nodeId, code) =>
     set((s) => ({ codeByNode: { ...s.codeByNode, [nodeId]: code } })),

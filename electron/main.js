@@ -66,6 +66,7 @@ ipcMain.handle('config:get', () => {
     hasGroqKey: Boolean(cfg.groqKey),
     hasMistralKey: Boolean(cfg.mistralKey),
     hasOpenrouterKey: Boolean(cfg.openrouterKey),
+    hasGlmKey: Boolean(cfg.glmKey),
     provider: cfg.provider || 'mock',
     codeProvider: cfg.codeProvider || (cfg.anthropicKey ? 'anthropic' : 'mock'),
     circuitProvider: cfg.circuitProvider || cfg.codeProvider || (cfg.anthropicKey ? 'anthropic' : 'mock'),
@@ -94,6 +95,12 @@ ipcMain.handle('config:setMistralKey', (_e, key) => {
   cfg.mistralKey = (key || '').trim();
   writeConfig(cfg);
   return { hasMistralKey: Boolean(cfg.mistralKey) };
+});
+ipcMain.handle('config:setGlmKey', (_e, key) => {
+  const cfg = readConfig();
+  cfg.glmKey = (key || '').trim();
+  writeConfig(cfg);
+  return { hasGlmKey: Boolean(cfg.glmKey) };
 });
 ipcMain.handle('config:setOpenrouterKey', (_e, key) => {
   const cfg = readConfig();
@@ -282,6 +289,8 @@ const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 const MISTRAL_MODEL = 'codestral-latest'; // purpose-built code model
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'; // free tier
+const GLM_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'; // Zhipu GLM
+const GLM_MODEL = 'glm-4-flash'; // free tier model
 
 // Maps a provider id -> the config key field that holds its API key.
 const CODE_KEYS = {
@@ -290,6 +299,7 @@ const CODE_KEYS = {
   groq: 'groqKey',
   mistral: 'mistralKey',
   openrouter: 'openrouterKey',
+  glm: 'glmKey',
 };
 
 // Resolve a desired provider id to one that actually has a key, else 'mock'.
@@ -434,6 +444,12 @@ async function generateText({ cfg, system, userText, provider: forced, maxTokens
     });
     return { text, mock: false, provider };
   }
+  if (provider === 'glm') {
+    const text = await openAICompatGenerate({
+      url: GLM_URL, key: cfg.glmKey, model: GLM_MODEL, system, userText, provider: 'GLM', maxTokens,
+    });
+    return { text, mock: false, provider };
+  }
 
   // anthropic (default) — resolve a valid model id from the account
   const claudeModel = await resolveAnthropicModel(cfg.anthropicKey);
@@ -542,6 +558,7 @@ ipcMain.handle('usage:get', async () => {
     { id: 'gemini', name: 'Gemini', hasKey: !!cfg.geminiKey, free: true, remaining: '∞', note: 'Free tier' },
     { id: 'groq', name: 'Groq', hasKey: !!cfg.groqKey, free: true, remaining: '∞', note: 'Free tier' },
     { id: 'mistral', name: 'Mistral', hasKey: !!cfg.mistralKey, free: true, remaining: '∞', note: 'Free tier (Codestral)' },
+    { id: 'glm', name: 'GLM (Zhipu)', hasKey: !!cfg.glmKey, free: true, remaining: '∞', note: 'Free tier (GLM-4-Flash)' },
   ];
 
   const or = { id: 'openrouter', name: 'OpenRouter', hasKey: !!cfg.openrouterKey, free: false, remaining: '—', note: 'No key' };

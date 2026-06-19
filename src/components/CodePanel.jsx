@@ -10,6 +10,7 @@ const AGENTS = [
   { id: 'groq', label: 'Groq' },
   { id: 'mistral', label: 'Mistral' },
   { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'glm', label: 'GLM' },
   { id: 'anthropic', label: 'Claude' },
   { id: 'mock', label: 'Mock' },
 ];
@@ -62,12 +63,14 @@ export default function CodePanel() {
   const hasGroqKey = useStore((s) => s.hasGroqKey);
   const hasMistralKey = useStore((s) => s.hasMistralKey);
   const hasOpenrouterKey = useStore((s) => s.hasOpenrouterKey);
+  const hasGlmKey = useStore((s) => s.hasGlmKey);
 
   const infoFor = (id) => ({
     gemini: { label: 'Gemini', hasKey: hasGeminiKey },
     groq: { label: 'Groq', hasKey: hasGroqKey },
     mistral: { label: 'Mistral', hasKey: hasMistralKey },
     openrouter: { label: 'OpenRouter', hasKey: hasOpenrouterKey },
+    glm: { label: 'GLM', hasKey: hasGlmKey },
     anthropic: { label: 'Claude', hasKey: hasAnthropicKey },
     mock: { label: 'Mock', hasKey: true },
   }[id] || { label: 'Mock', hasKey: true });
