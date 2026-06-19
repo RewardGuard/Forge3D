@@ -63,6 +63,11 @@ export default function SettingsButton() {
   // --- code (AI) providers, data-driven ---
   const CODE_PROVIDERS = [
     {
+      id: 'base', name: 'Forge3D Cloud', tag: 'FREE', model: 'base model · no key',
+      note: 'Use the built-in base model — works out of the box, no account or API key. Powered by a shared Forge3D server. Pick a provider below to use your own model instead.',
+      noKey: true,
+    },
+    {
       id: 'gemini', name: 'Google Gemini', tag: 'FREE', model: 'Gemini 2.0 Flash',
       placeholder: 'AIza…', url: 'https://aistudio.google.com/app/apikey', urlLabel: 'aistudio.google.com',
       note: 'Best free balance — ~15 req/min, 1500/day. No credit card needed.',
@@ -160,8 +165,8 @@ export default function SettingsButton() {
               <section className="set-section">
                 <h4>AI code generation</h4>
                 <p className="muted small">
-                  Pick who writes your Arduino sketches. <b>Gemini, Groq, Mistral and OpenRouter are free</b> —
-                  create a key, paste it below, and you're set.
+                  Use the <b>Forge3D Cloud base model</b> (no key, works instantly) — or pick any provider
+                  below to use <b>your own model</b> (Gemini, Groq, Mistral, OpenRouter and GLM are free; paste a key).
                 </p>
 
                 <div className="prov-grid">

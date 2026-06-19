@@ -291,6 +291,20 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'; // free tier
 const GLM_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'; // Zhipu GLM
 const GLM_MODEL = 'glm-4-flash'; // free tier model
+// Forge3D Cloud proxy — the "base model": keys live on our server, no user key.
+const PROXY_URL = process.env.FORGE3D_PROXY || 'http://3.23.64.187:8787';
+
+// Call the cloud proxy (server holds the key). Returns generated text.
+async function proxyGenerate({ system, userText, maxTokens = 2000 }) {
+  const res = await fetch(`${PROXY_URL}/v1/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ system, user: userText, maxTokens }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Forge3D Cloud error ${res.status}`);
+  return data.text || '';
+}
 
 // Maps a provider id -> the config key field that holds its API key.
 const CODE_KEYS = {
@@ -303,8 +317,10 @@ const CODE_KEYS = {
 };
 
 // Resolve a desired provider id to one that actually has a key, else 'mock'.
+// 'base' (Forge3D Cloud) needs no local key — the server holds it.
 function providerWithKey(want, cfg) {
   if (!want || want === 'mock') return 'mock';
+  if (want === 'base') return 'base';
   const keyField = CODE_KEYS[want];
   return keyField && cfg[keyField] ? want : 'mock';
 }
@@ -418,6 +434,10 @@ void loop() {
 async function generateText({ cfg, system, userText, provider: forced, maxTokens = 2000 }) {
   const provider = forced || codeProviderFor(cfg);
   if (provider === 'mock') return { text: null, mock: true, provider: 'mock' };
+  if (provider === 'base') {
+    const text = await proxyGenerate({ system, userText, maxTokens });
+    return { text, mock: false, provider: 'base' };
+  }
 
   if (provider === 'gemini') {
     const text = await openAICompatGenerate({
@@ -555,6 +575,7 @@ ipcMain.handle('claude:ask', async (_e, { question, netlist } = {}) => {
 ipcMain.handle('usage:get', async () => {
   const cfg = readConfig();
   const out = [
+    { id: 'base', name: 'Forge3D Cloud (base)', hasKey: true, free: true, remaining: '∞', note: 'Shared server key — no setup needed' },
     { id: 'gemini', name: 'Gemini', hasKey: !!cfg.geminiKey, free: true, remaining: '∞', note: 'Free tier' },
     { id: 'groq', name: 'Groq', hasKey: !!cfg.groqKey, free: true, remaining: '∞', note: 'Free tier' },
     { id: 'mistral', name: 'Mistral', hasKey: !!cfg.mistralKey, free: true, remaining: '∞', note: 'Free tier (Codestral)' },

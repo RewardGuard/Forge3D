@@ -6,6 +6,7 @@ import { parseAgentJson } from '../lib/agentJson.js';
 
 // Selectable agents (same providers as Settings; switchable inline here).
 const AGENTS = [
+  { id: 'base', label: 'Forge3D Cloud (free)' },
   { id: 'gemini', label: 'Gemini' },
   { id: 'groq', label: 'Groq' },
   { id: 'mistral', label: 'Mistral' },
@@ -66,6 +67,7 @@ export default function CodePanel() {
   const hasGlmKey = useStore((s) => s.hasGlmKey);
 
   const infoFor = (id) => ({
+    base: { label: 'Forge3D Cloud', hasKey: true },
     gemini: { label: 'Gemini', hasKey: hasGeminiKey },
     groq: { label: 'Groq', hasKey: hasGroqKey },
     mistral: { label: 'Mistral', hasKey: hasMistralKey },
