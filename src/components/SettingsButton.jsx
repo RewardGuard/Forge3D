@@ -92,9 +92,9 @@ export default function SettingsButton() {
       has: hasOpenrouterKey, setHas: setHasOpenrouterKey, save: (k) => window.forge.config.setOpenrouterKey(k), resKey: 'hasOpenrouterKey',
     },
     {
-      id: 'glm', name: 'GLM (Zhipu)', tag: 'FREE', model: 'GLM-4-Flash',
-      placeholder: 'glm key…', url: 'https://open.bigmodel.cn/usercenter/apikeys', urlLabel: 'bigmodel.cn',
-      note: 'Zhipu GLM — GLM-4-Flash is free. Strong at code. Paste your API key below.',
+      id: 'glm', name: 'GLM (Zhipu)', tag: 'FREE', model: 'GLM-4.5-Flash',
+      placeholder: 'glm key…', url: 'https://z.ai/manage-apikey/apikey-list', urlLabel: 'z.ai',
+      note: 'Zhipu GLM — GLM-4.5-Flash is free. Strong at code. Paste your z.ai API key below.',
       has: hasGlmKey, setHas: setHasGlmKey, save: (k) => window.forge.config.setGlmKey(k), resKey: 'hasGlmKey',
     },
     {

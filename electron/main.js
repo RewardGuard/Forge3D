@@ -289,8 +289,8 @@ const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
 const MISTRAL_MODEL = 'codestral-latest'; // purpose-built code model
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'; // free tier
-const GLM_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'; // Zhipu GLM
-const GLM_MODEL = 'glm-4-flash'; // free tier model
+const GLM_URL = 'https://api.z.ai/api/paas/v4/chat/completions'; // Zhipu GLM (z.ai)
+const GLM_MODEL = 'glm-4.5-flash'; // free tier model
 // Forge3D Cloud proxy — the "base model": keys live on our server, no user key.
 const PROXY_URL = process.env.FORGE3D_PROXY || 'http://18.222.194.21:8787';
 

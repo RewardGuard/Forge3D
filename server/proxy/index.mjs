@@ -23,7 +23,7 @@ const PORT = Number(process.env.PORT) || 8787;
 
 // OpenAI-compatible providers, tried in priority order (first with a key wins).
 const PROVIDERS = [
-  { id: 'glm',        env: 'GLM_KEY',        url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4-flash' },
+  { id: 'glm',        env: 'GLM_KEY',        url: 'https://api.z.ai/api/paas/v4/chat/completions',         model: 'glm-4.5-flash' },
   { id: 'groq',       env: 'GROQ_KEY',       url: 'https://api.groq.com/openai/v1/chat/completions',       model: 'llama-3.3-70b-versatile' },
   { id: 'gemini',     env: 'GEMINI_KEY',     url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-2.0-flash' },
   { id: 'mistral',    env: 'MISTRAL_KEY',    url: 'https://api.mistral.ai/v1/chat/completions',            model: 'codestral-latest' },
