@@ -292,7 +292,7 @@ const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'; // free tier
 const GLM_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'; // Zhipu GLM
 const GLM_MODEL = 'glm-4-flash'; // free tier model
 // Forge3D Cloud proxy — the "base model": keys live on our server, no user key.
-const PROXY_URL = process.env.FORGE3D_PROXY || 'http://3.23.64.187:8787';
+const PROXY_URL = process.env.FORGE3D_PROXY || 'http://18.222.194.21:8787';
 
 // Call the cloud proxy (server holds the key). Returns generated text.
 async function proxyGenerate({ system, userText, maxTokens = 2000 }) {
