@@ -12,7 +12,9 @@
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
     "build": "vite build",
     "dist": "npm run build && electron-builder --mac dmg",
-    "start": "cross-env NODE_ENV=development electron ."
+    "start": "cross-env NODE_ENV=development electron .",
+    "test": "node scripts/benchmark-sim.mjs && node scripts/acceptance-orchestra.mjs",
+    "test:acceptance": "node scripts/acceptance-orchestra.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.0",

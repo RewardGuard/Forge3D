@@ -70,6 +70,9 @@ ipcMain.handle('config:get', () => {
     provider: cfg.provider || 'mock',
     codeProvider: cfg.codeProvider || (cfg.anthropicKey ? 'anthropic' : 'mock'),
     circuitProvider: cfg.circuitProvider || cfg.codeProvider || (cfg.anthropicKey ? 'anthropic' : 'mock'),
+    orchestraDirector: cfg.orchestraDirector || 'base',
+    orchestraVision: cfg.orchestraVision || 'hf-glm45v',
+    orchestraHeadroom: cfg.orchestraHeadroom || 'balanced',
   };
 });
 ipcMain.handle('config:setAnthropicKey', (_e, key) => {
@@ -119,6 +122,24 @@ ipcMain.handle('config:setCircuitProvider', (_e, circuitProvider) => {
   cfg.circuitProvider = circuitProvider;
   writeConfig(cfg);
   return { circuitProvider };
+});
+ipcMain.handle('config:setOrchestraDirector', (_e, orchestraDirector) => {
+  const cfg = readConfig();
+  cfg.orchestraDirector = orchestraDirector;
+  writeConfig(cfg);
+  return { orchestraDirector };
+});
+ipcMain.handle('config:setOrchestraVision', (_e, orchestraVision) => {
+  const cfg = readConfig();
+  cfg.orchestraVision = orchestraVision;
+  writeConfig(cfg);
+  return { orchestraVision };
+});
+ipcMain.handle('config:setOrchestraHeadroom', (_e, orchestraHeadroom) => {
+  const cfg = readConfig();
+  cfg.orchestraHeadroom = orchestraHeadroom;
+  writeConfig(cfg);
+  return { orchestraHeadroom };
 });
 ipcMain.handle('config:setMeshyKey', (_e, key) => {
   const cfg = readConfig();
@@ -291,6 +312,10 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'; // free tier
 const GLM_URL = 'https://api.z.ai/api/paas/v4/chat/completions'; // Zhipu GLM (z.ai)
 const GLM_MODEL = 'glm-4.5-flash'; // free tier model
+// Hugging Face inference router (OpenAI-compatible). Used for the Orchestra
+// VISION check: GLM-4.5V can read a screenshot of the 3D viewport and judge it.
+const HF_ROUTER_URL = 'https://router.huggingface.co/v1/chat/completions';
+const HF_VISION_MODEL = 'zai-org/GLM-4.5V';
 // Forge3D Cloud proxy — the "base model": keys live on our server, no user key.
 const PROXY_URL = process.env.FORGE3D_PROXY || 'http://18.222.194.21:8787';
 
@@ -493,7 +518,7 @@ async function generateText({ cfg, system, userText, provider: forced, maxTokens
   return { text, mock: false, provider: 'anthropic' };
 }
 
-ipcMain.handle('claude:generate', async (_e, { prompt, context, target } = {}) => {
+ipcMain.handle('claude:generate', async (_e, { prompt, context, target, provider: providerOverride } = {}) => {
   const cfg = readConfig();
   const system =
     target === 'rpi5'
@@ -511,7 +536,11 @@ ipcMain.handle('claude:generate', async (_e, { prompt, context, target } = {}) =
     (context ? `Circuit context:\n${context}\n\n` : '') +
     `Task: ${prompt || (target === 'rpi5' ? 'Blink an LED on a GPIO pin.' : 'Blink the onboard LED.')}`;
 
-  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: codeProviderFor(cfg) });
+  // Orchestra passes its director provider so all its delegated work uses ONE
+  // model the user actually has a key for — not the separate (possibly stale)
+  // codeProvider setting.
+  const want = providerOverride ? providerWithKey(providerOverride, cfg) : codeProviderFor(cfg);
+  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: want });
   if (mock) return { code: mockSketch(prompt, target), mock: true, provider: 'mock' };
   return { code: text, mock: false, provider };
 });
@@ -520,7 +549,7 @@ ipcMain.handle('claude:generate', async (_e, { prompt, context, target } = {}) =
 // Receives a text netlist + the parts catalog and returns a JSON proposal of
 // concrete edits (add/remove wires & parts). The renderer asks the user to
 // approve before applying anything to the canvas.
-ipcMain.handle('claude:circuit', async (_e, { prompt, netlist, catalog } = {}) => {
+ipcMain.handle('claude:circuit', async (_e, { prompt, netlist, catalog, provider: providerOverride } = {}) => {
   const cfg = readConfig();
   const system =
     'You are an expert electronics engineer debugging an Arduino/breadboard circuit. ' +
@@ -541,7 +570,9 @@ ipcMain.handle('claude:circuit', async (_e, { prompt, netlist, catalog } = {}) =
 
   // Building a whole circuit can take many actions — give the model plenty of
   // room so the JSON never gets cut off mid-array (truncation = unreadable).
-  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: circuitProviderFor(cfg), maxTokens: 6000 });
+  // An override (from Orchestra) routes this through the user's Orchestra model.
+  const want = providerOverride ? providerWithKey(providerOverride, cfg) : circuitProviderFor(cfg);
+  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: want, maxTokens: 6000 });
   if (mock) {
     return {
       raw: JSON.stringify({
@@ -567,6 +598,58 @@ ipcMain.handle('claude:ask', async (_e, { question, netlist } = {}) => {
   const { text, mock, provider } = await generateText({ cfg, system, userText, provider: circuitProviderFor(cfg), maxTokens: 3000 });
   if (mock) return { answer: 'Mock mode — choose a circuit agent (Groq is free) and add its key in Settings to ask real questions.', mock: true, provider: 'mock' };
   return { answer: text, mock: false, provider };
+});
+
+// ---- IPC: Orchestra director — text reasoning step ----
+// The conductor model plans the build and emits a single tool call as JSON.
+// It routes through the SAME provider router as codegen, so the director can be
+// the free Forge3D Cloud base model, GLM, Gemini, Groq, etc. Kept cheap on
+// purpose (low max_tokens) — Orchestra issues one action at a time.
+ipcMain.handle('orchestra:think', async (_e, { system, userText, maxTokens = 1200 } = {}) => {
+  const cfg = readConfig();
+  const want = providerWithKey(cfg.orchestraDirector || 'base', cfg);
+  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: want, maxTokens });
+  return { text: text || '', mock, provider };
+});
+
+// ---- IPC: Orchestra vision — let the director SEE the viewport ----
+// Sends a downscaled screenshot to GLM-4.5V via the Hugging Face router so the
+// model can confirm the design before the next step ("does this look like a
+// car? are the wheels on the ground?"). Needs the user's free HF token.
+ipcMain.handle('orchestra:vision', async (_e, { prompt, imageDataUrl } = {}) => {
+  const cfg = readConfig();
+  if (!cfg.hfToken) {
+    return {
+      text: 'Vision check skipped — add a free Hugging Face token in Settings so Orchestra can SEE the design with GLM-4.5V.',
+      model: 'none', mock: true,
+    };
+  }
+  if (!imageDataUrl) throw new Error('orchestra:vision needs an image');
+  const res = await fetch(HF_ROUTER_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cfg.hfToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: HF_VISION_MODEL,
+      max_tokens: 600,
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt || 'Describe the image and whether it matches the described goal.' },
+            { type: 'image_url', image_url: { url: imageDataUrl } },
+          ],
+        },
+      ],
+    }),
+  });
+  let data = {};
+  try { data = await res.json(); } catch { /* non-JSON */ }
+  if (!res.ok) throw new Error(friendlyHttpError(res.status, 'GLM-4.5V (Hugging Face)', data?.error?.message || data?.error));
+  let content = data?.choices?.[0]?.message?.content ?? '';
+  // some vision/reasoning models return content as an array of parts
+  if (Array.isArray(content)) content = content.map((c) => c?.text || '').join('').trim();
+  return { text: String(content || '(no answer)'), model: HF_VISION_MODEL };
 });
 
 // ---- IPC: per-provider remaining API credits ----

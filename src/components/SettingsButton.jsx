@@ -30,6 +30,10 @@ export default function SettingsButton() {
 
   const provider = useStore((s) => s.provider);
   const codeProvider = useStore((s) => s.codeProvider);
+  const orchestraDirector = useStore((s) => s.orchestraDirector);
+  const orchestraHeadroom = useStore((s) => s.orchestraHeadroom);
+  const setOrchestraDirector = useStore((s) => s.setOrchestraDirector);
+  const setOrchestraHeadroom = useStore((s) => s.setOrchestraHeadroom);
   const hasMeshyKey = useStore((s) => s.hasMeshyKey);
   const hasHfToken = useStore((s) => s.hasHfToken);
   const hasThingiverseToken = useStore((s) => s.hasThingiverseToken);
@@ -120,6 +124,14 @@ export default function SettingsButton() {
   async function chooseCodeProvider(id) {
     await window.forge.config.setCodeProvider(id);
     setCodeProvider(id);
+  }
+  async function chooseOrchestraDirector(id) {
+    await window.forge.config.setOrchestraDirector(id);
+    setOrchestraDirector(id);
+  }
+  async function chooseHeadroom(id) {
+    await window.forge.config.setOrchestraHeadroom(id);
+    setOrchestraHeadroom(id);
   }
   async function saveCodeKey(p) {
     const val = (keyInputs[p.id] || '').trim();
@@ -216,6 +228,54 @@ export default function SettingsButton() {
                       </div>
                     </>
                   )}
+                </div>
+              </section>
+
+              {/* ============ ORCHESTRA AI ============ */}
+              <section className="set-section">
+                <h4>Orchestra AI (the director)</h4>
+                <p className="muted small">
+                  Orchestra builds whole projects: it plans, then conducts the other AIs and tests
+                  the result in the Life Sim. Pick the <b>director</b> model that does the planning —
+                  the free Forge3D Cloud base model works with no key.
+                </p>
+                <label className="lbl">Director model (reasoning)</label>
+                <div className="prov-grid">
+                  {CODE_PROVIDERS.map((p) => (
+                    <button
+                      key={p.id}
+                      className={'prov-card' + (orchestraDirector === p.id ? ' on' : '')}
+                      onClick={() => chooseOrchestraDirector(p.id)}
+                    >
+                      <span className="prov-name">{p.name}</span>
+                      <span className={'prov-tag ' + (p.tag === 'PAID' ? 'paid' : 'free')}>{p.tag}</span>
+                      <span className="prov-model">{p.model}</span>
+                      {(p.noKey || p.has) && <span className="prov-check">{p.noKey ? '•' : '✓ key'}</span>}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="lbl">Vision (sees the 3D viewport)</label>
+                <div className="set-card">
+                  <div className="row" style={{ alignItems: 'baseline' }}>
+                    <b>GLM-4.5V</b>
+                    <span className="prov-tag free">FREE</span>
+                    <span className="spacer" />
+                    <span className={'tok ' + (hasHfToken ? 'ok' : '')}>{hasHfToken ? 'HF token ✓' : 'no HF token'}</span>
+                  </div>
+                  <p className="muted small">
+                    Orchestra captures the viewport and asks GLM-4.5V "does this look right?" before moving on.
+                    It runs through the Hugging Face router using your free HF token (set it under <b>3D model generator → Hugging Face</b> below).
+                  </p>
+                  {!hasHfToken && <p className="status">Without a token, Orchestra still builds — it just can't visually confirm steps.</p>}
+                </div>
+
+                <label className="lbl">Token headroom</label>
+                <p className="muted small">Caps how much each run may spend so you can run Orchestra often. Eco = fewest tokens, Max = longest builds.</p>
+                <div className="seg">
+                  {[{ id: 'eco', l: 'Eco' }, { id: 'balanced', l: 'Balanced' }, { id: 'max', l: 'Max' }].map((o) => (
+                    <button key={o.id} className={'seg-btn' + (orchestraHeadroom === o.id ? ' on' : '')} onClick={() => chooseHeadroom(o.id)}>{o.l}</button>
+                  ))}
                 </div>
               </section>
 

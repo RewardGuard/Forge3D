@@ -1,0 +1,428 @@
+// ============================================================================
+// Orchestra action API — the control surface every AI uses to drive Forge3D.
+//
+// This is the single vocabulary the in-app Orchestra director speaks, and the
+// exact same set of tools the Claude MCP plugin (server/orchestra-mcp) bridges.
+// Each tool is small, imperative and JSON-in / JSON-out, so a model can call it
+// blindly. Tools operate on the zustand store and the existing `window.forge`
+// IPC bridges (mesh gen, the circuit agent, codegen) — Orchestra never wires a
+// circuit by hand, it hands a prompt to `build_circuit` (the circuit agent).
+// ============================================================================
+import { useStore } from './store.js';
+import { captureViewport } from './capture.js';
+import { buildNetlist, partsCatalog } from './netlist.js';
+import { PART_BY_ID, PARTS, DEFAULT_SHAPE_UNIT } from '../data/parts.js';
+import { parseAgentJson } from './agentJson.js';
+import { placeBlueprint, validateGeometry, applyGeometryFixes, BLUEPRINTS } from './orchestraGeometry.js';
+import { motorReport, validateCircuit, indicatorReport } from './orchestraCircuit.js';
+import { detectPattern, seedSpec } from './orchestraSpec.js';
+import { composeSpec, getLastSpec } from './orchestraCompose.js';
+import { validateStructure, applyStructureFixes } from './orchestraPhysics.js';
+import { validateManufacture, validateIntegration } from './orchestraManufacture.js';
+
+// Compact catalog for the director: "Category: id, id, …" (no pins — the circuit
+// agent gets the full pinned catalog separately). Small = cheap + less confusing
+// for a weak free model.
+export function compactCatalog() {
+  const byCat = {};
+  for (const p of PARTS) (byCat[p.category] = byCat[p.category] || []).push(p.id);
+  return Object.entries(byCat).map(([c, ids]) => `${c}: ${ids.join(', ')}`).join('\n');
+}
+
+const S = () => useStore.getState();
+const PRIMITIVE_KINDS = ['box', 'sphere', 'cylinder', 'cone', 'pyramid', 'torus', 'capsule', 'plane', 'tetrahedron', 'icosahedron'];
+const MOTORISH = new Set(['dc-motor', 'servo-sg90', 'servo-mg996', 'stepper-28byj', 'stepper-nema17', 'vibration-motor', 'pump-12v', 'linear-actuator']);
+
+function mockKind(prompt) {
+  const p = String(prompt || '').toLowerCase();
+  if (/(ball|sphere|planet|orb|head|wheel|tire)/.test(p)) return /(wheel|tire)/.test(p) ? 'cylinder' : 'sphere';
+  if (/(can|bottle|tube|pipe|cylinder|barrel)/.test(p)) return 'cylinder';
+  return 'box';
+}
+
+// Add a mesh and return its id (store.addMesh respects a provided id).
+function addReturningId(mesh) {
+  const id = S().newMeshId();
+  S().addMesh({ id, ...mesh });
+  return id;
+}
+
+// --- compact, headroom-aware snapshot of everything the director needs ---
+export function compactState(headroom = 'balanced') {
+  const s = S();
+  const eco = headroom === 'eco';
+  const round = (a) => (Array.isArray(a) ? a.map((n) => +(+n).toFixed(2)) : a);
+  const meshes = s.meshes
+    .filter((m) => m.kind !== 'part' || !eco) // eco hides raw footprints
+    .map((m) => ({
+      id: m.id,
+      label: m.label || m.kind,
+      kind: m.kind,
+      partId: m.partId,
+      ...(eco ? {} : { pos: round(m.position) }),
+      ...(m.attachedTo ? { attachedTo: m.attachedTo, drives: m.drives !== false } : {}),
+      ...(m.groupId ? { groupId: m.groupId } : {}),
+    }));
+  const motors = s.nodes.filter((n) => MOTORISH.has(n.partId)).map((n) => n.id);
+  const inputs = s.nodes
+    .filter((n) => ['joystick', 'push-button', 'toggle-switch', 'potentiometer'].includes(n.partId))
+    .map((n) => ({ id: n.id, partId: n.partId, value: s.inputs[n.id] ?? null }));
+  return {
+    tab: s.tab,
+    objectCount: meshes.length,
+    meshes,
+    // the full part list is here so the director never re-adds something that
+    // already exists (a common failure when a sub-agent call errors out)
+    circuit: { nodes: s.nodes.map((n) => ({ id: n.id, partId: n.partId })), wires: s.wires.length, motors, inputs },
+    sim: { lifeSimRunning: s.lifeSimRunning, circuitOn: s.simOn },
+    provider3d: s.provider,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool registry. `params` is documentation only (shown to the model). `run`
+// returns a small JSON-serializable result; throw to report a failure.
+// ---------------------------------------------------------------------------
+export const TOOLS = {
+  get_state: {
+    desc: 'Read a compact snapshot of the scene + circuit + sim state.',
+    params: {},
+    run: () => compactState(S().orchestraHeadroom),
+  },
+
+  get_netlist: {
+    desc: 'Read the circuit as a text netlist (parts, pins, wires, loose pins).',
+    params: {},
+    run: () => ({ netlist: buildNetlist(S().nodes, S().wires) }),
+  },
+
+  parts_catalog: {
+    desc: 'List valid partIds grouped by category (only if you need a part not in COMMON PARTS).',
+    params: {},
+    run: () => ({ catalog: compactCatalog() }),
+  },
+
+  add_primitive: {
+    desc: 'Add a built-in primitive shape to the 3D scene.',
+    params: { kind: `one of ${PRIMITIVE_KINDS.join('|')}`, label: 'string', color: '#hex (optional)' },
+    run: ({ kind = 'box', label, color = '#7c93b8' }) => {
+      if (!PRIMITIVE_KINDS.includes(kind)) throw new Error(`unknown primitive "${kind}"`);
+      const id = addReturningId({ kind, label: label || kind, color, scale: DEFAULT_SHAPE_UNIT });
+      return { id, kind };
+    },
+  },
+
+  gen_mesh: {
+    desc: 'Generate a 3D model from a text prompt with the active generator (Meshy/HF/mock) and add it to the scene.',
+    params: { prompt: 'string', style: 'realistic|sculpture|cartoon (Meshy only)' },
+    run: async ({ prompt, style = 'realistic' }) => {
+      if (!prompt) throw new Error('gen_mesh needs a prompt');
+      const provider = S().provider;
+      const label = String(prompt).slice(0, 40);
+      if (provider === 'hf') {
+        const { modelUrl } = await window.forge.hf.generate({ prompt, steps: 32 });
+        if (!modelUrl) throw new Error('HF returned no model (busy or out of quota)');
+        const id = addReturningId({ kind: 'meshy', label, color: '#8aa0c8', modelUrl, scale: DEFAULT_SHAPE_UNIT });
+        return { id, provider };
+      }
+      const { taskId, mock } = await window.forge.meshy.createTextTo3D({ prompt, artStyle: style });
+      for (let i = 0; i < 120; i++) {
+        const task = await window.forge.meshy.getTask(taskId);
+        if (task.status === 'SUCCEEDED') {
+          const id = addReturningId({
+            kind: mock ? mockKind(prompt) : 'meshy',
+            label, color: '#8aa0c8',
+            modelUrl: task.model_urls?.glb || null,
+            scale: DEFAULT_SHAPE_UNIT,
+          });
+          return { id, provider: mock ? 'mock' : 'meshy' };
+        }
+        if (task.status === 'FAILED') throw new Error('mesh generation failed');
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      throw new Error('mesh generation timed out');
+    },
+  },
+
+  move_mesh: {
+    desc: 'Reposition / rotate / rescale an existing object by id.',
+    params: { id: 'mesh id', position: '[x,y,z] (opt)', rotation: '[x,y,z] radians (opt)', scale: 'number (opt)' },
+    run: ({ id, position, rotation, scale }) => {
+      if (!S().meshes.some((m) => m.id === id)) throw new Error(`no mesh "${id}"`);
+      const patch = {};
+      if (position) patch.position = position;
+      if (rotation) patch.rotation = rotation;
+      if (scale != null) patch.scale = scale;
+      S().updateMesh(id, patch);
+      return { id, ...patch };
+    },
+  },
+
+  attach_motor: {
+    desc: 'Mount one object onto another so they move as a unit. If one is a motor, it spins the other when the circuit powers it (e.g. attach a wheel to a dc-motor part).',
+    params: { childId: 'mesh id mounted on parent', parentId: 'mesh id (or null to detach)', drives: 'bool — spin when powered (default true)' },
+    run: ({ childId, parentId, drives = true }) => {
+      if (!S().meshes.some((m) => m.id === childId)) throw new Error(`no mesh "${childId}"`);
+      if (parentId && !S().meshes.some((m) => m.id === parentId)) throw new Error(`no mesh "${parentId}"`);
+      S().setAttachment(childId, parentId || null, drives);
+      return { childId, parentId: parentId || null, drives };
+    },
+  },
+
+  set_material: {
+    desc: 'Set what an object is made of (drives Life Sim durability).',
+    params: { id: 'mesh id', materialKey: 'e.g. steel, abs, aluminum, wood…' },
+    run: ({ id, materialKey }) => {
+      if (!S().meshes.some((m) => m.id === id)) throw new Error(`no mesh "${id}"`);
+      S().setMeshMaterial(id, materialKey);
+      return { id, materialKey };
+    },
+  },
+
+  group: {
+    desc: 'Group several objects so they select/move/fall as one assembly.',
+    params: { ids: '[mesh id, …] (>= 2)' },
+    run: ({ ids }) => {
+      if (!Array.isArray(ids) || ids.length < 2) throw new Error('group needs >= 2 ids');
+      useStore.setState({ selectedMeshIds: ids, selectedMeshId: ids[ids.length - 1] });
+      S().groupSelected();
+      return { grouped: ids.length };
+    },
+  },
+
+  add_part: {
+    desc: 'Drop a single electronic part onto the circuit canvas by partId. Use parts_catalog first for valid ids.',
+    params: { partId: 'valid partId' },
+    run: ({ partId }) => {
+      if (!PART_BY_ID[partId]) throw new Error(`unknown partId "${partId}"`);
+      S().addNode(partId);
+      const node = S().nodes[S().nodes.length - 1];
+      return { nodeId: node.id, partId };
+    },
+  },
+
+  build_circuit: {
+    desc: 'Hand a plain-language wiring request to the circuit agent. It proposes add/remove part & wire edits which are applied automatically. This is how Orchestra builds circuits — it does NOT wire pins itself.',
+    params: { prompt: 'e.g. "wire an Arduino Uno to two dc-motors via an L298N, driven by a joystick"' },
+    run: async ({ prompt }) => {
+      const { raw } = await window.forge.claude.circuit({
+        prompt: prompt || 'Build/repair the circuit for the current goal.',
+        netlist: buildNetlist(S().nodes, S().wires),
+        catalog: partsCatalog(),
+        provider: S().orchestraDirector, // use Orchestra's model, not the separate circuit setting
+      });
+      const parsed = parseAgentJson(raw);
+      if (!parsed) return { applied: 0, errors: ['circuit agent did not return structured edits'], summary: String(raw || '').slice(0, 300) };
+      const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
+      const { applied, errors } = S().applyAgentActions(actions);
+      return { applied, errors, summary: parsed.summary || '', proposed: actions.length };
+    },
+  },
+
+  gen_code: {
+    desc: 'Ask the code agent to write a sketch/program for a microcontroller node and load it into the sim.',
+    params: { nodeId: 'MCU node id', prompt: 'what the firmware should do' },
+    run: async ({ nodeId, prompt }) => {
+      const node = S().nodes.find((n) => n.id === nodeId);
+      if (!node) throw new Error(`no circuit node "${nodeId}"`);
+      const target = node.partId === 'rpi5' ? 'rpi5' : 'arduino';
+      const context = buildNetlist(S().nodes, S().wires);
+      const { code } = await window.forge.claude.generate({ prompt, context, target, provider: S().orchestraDirector });
+      S().setNodeCode(nodeId, code || '');
+      return { nodeId, lines: String(code || '').split('\n').length };
+    },
+  },
+
+  project_circuit_3d: {
+    desc: 'Push the circuit parts into the 3D scene as real-scale bodies (so the Life Sim has something physical to run).',
+    params: {},
+    run: () => { S().projectCircuitTo3D(); return { objects: S().meshes.length }; },
+  },
+
+  set_tab: {
+    desc: 'Switch the visible workspace.',
+    params: { tab: 'design|circuit|export|lifesim|orchestra' },
+    run: ({ tab }) => {
+      if (!['design', 'circuit', 'export', 'lifesim', 'orchestra'].includes(tab)) throw new Error(`unknown tab "${tab}"`);
+      S().setTab(tab);
+      return { tab };
+    },
+  },
+
+  run_sim: {
+    desc: 'Switch to the Life Sim and start it (powers the circuit + gravity + spinning motors).',
+    params: {},
+    run: () => { S().setTab('lifesim'); S().setLifeSimRunning(true); if (!S().simOn) S().toggleSim(); return { running: true }; },
+  },
+
+  pause_sim: {
+    desc: 'Pause the Life Sim.',
+    params: {},
+    run: () => { S().setLifeSimRunning(false); return { running: false }; },
+  },
+
+  set_joystick: {
+    desc: 'Move a joystick input. x/y are 0..1 (0.5 = center, 1 = up/right). sw = press the stick button.',
+    params: { nodeId: 'joystick node id (optional — defaults to first joystick)', x: '0..1', y: '0..1', sw: 'bool (opt)' },
+    run: ({ nodeId, x = 0.5, y = 0.5, sw }) => {
+      const id = nodeId || S().nodes.find((n) => n.partId === 'joystick')?.id;
+      if (!id) throw new Error('no joystick in the circuit');
+      const prev = S().inputs[id] || {};
+      S().setInput(id, { ...prev, x, y, ...(sw != null ? { sw } : {}) });
+      return { nodeId: id, x, y };
+    },
+  },
+
+  set_input: {
+    desc: 'Drive a button (value=true/false), switch (true/false) or potentiometer (0..1).',
+    params: { nodeId: 'input node id', value: 'bool | 0..1' },
+    run: ({ nodeId, value }) => {
+      if (!S().nodes.some((n) => n.id === nodeId)) throw new Error(`no input node "${nodeId}"`);
+      S().setInput(nodeId, value);
+      return { nodeId, value };
+    },
+  },
+
+  get_sim_report: {
+    desc: 'Read the latest Life Sim physics report (per-object temperature, integrity, status).',
+    params: {},
+    run: () => {
+      const rep = S().simReport || {};
+      const objects = Object.entries(rep.objects || {}).map(([id, o]) => ({
+        id, temp: Math.round(o.temp ?? 25), integrity: +(o.integrity ?? 1).toFixed(2),
+        ignited: !!o.ignited, destroyed: !!o.destroyed,
+      }));
+      return { elapsed: +(rep._t || 0).toFixed(1), running: S().lifeSimRunning, objects };
+    },
+  },
+
+  look: {
+    desc: 'CAPTURE the live viewport and ask the vision model a question about it ("does this look like a 4-wheeled car? are the wheels on the ground?"). Use this to CONFIRM a step before moving on.',
+    params: { question: 'what to check in the image' },
+    run: async ({ question }) => {
+      const headroom = S().orchestraHeadroom;
+      const shot = captureViewport(headroom);
+      if (!shot) return { ok: false, verdict: 'No viewport to capture yet (add/generate an object first).' };
+      // stash a thumbnail on the current step so the live panel shows what the model saw
+      S().orchestraPatchLast({ image: shot.dataUrl });
+      const res = await window.forge.orchestra.vision({
+        prompt: question || 'Describe what you see and whether it matches the goal.',
+        imageDataUrl: shot.dataUrl,
+      });
+      return { ok: true, verdict: res?.text || '(no answer)', model: res?.model };
+    },
+  },
+
+  build_blueprint: {
+    desc: 'Place a correctly-proportioned starter build for a known archetype (car, robot, lamp) — chassis, wheels-laid-flat, etc. Replaces existing design shapes. Use this first for a recognized project, then customize.',
+    params: { archetype: `one of ${Object.keys(BLUEPRINTS).join('|')}` },
+    run: ({ archetype }) => {
+      const created = placeBlueprint(archetype);
+      if (!created) throw new Error(`no blueprint for "${archetype}"`);
+      return { archetype, created };
+    },
+  },
+
+  check_geometry: {
+    desc: 'Validate the 3D geometry (wheel orientation, floating parts, bad proportions) and auto-fix what is safe. Returns the issues found.',
+    params: { archetype: 'car|robot|lamp|generic (optional)' },
+    run: ({ archetype = 'generic' }) => {
+      const issues = validateGeometry(archetype);
+      const fixed = applyGeometryFixes(issues);
+      const remaining = validateGeometry(archetype);
+      return { found: issues.map((i) => i.msg), autofixed: fixed, remaining: remaining.map((i) => i.msg) };
+    },
+  },
+
+  check_circuit: {
+    desc: 'Functionally validate the circuit (power, ground, driver, and whether motors actually turn when driven). Returns concrete deficiencies — empty means it works.',
+    params: { archetype: 'car|robot|lamp|generic (optional)' },
+    run: ({ archetype = 'generic' }) => ({ deficiencies: validateCircuit(archetype) }),
+  },
+
+  check_motors: {
+    desc: 'Run the electrical sim with inputs driven (joystick forward) and report whether each motor is active and its direction.',
+    params: {},
+    run: () => motorReport(),
+  },
+
+  design_structure: {
+    desc: 'Compose a full structural product (house/enclosure) from a goal: real-scale geometry with CSG cutouts (doors/windows/ports) PLUS electronics mounted on it and wired by function. Use for non-vehicle builds.',
+    params: { goal: 'plain-language project description' },
+    run: ({ goal }) => {
+      const pattern = detectPattern(goal);
+      const spec = seedSpec(pattern, goal);
+      if (!spec) throw new Error(`no structural template for "${pattern}" — use add_primitive/build_circuit`);
+      const comp = composeSpec(spec);
+      return { pattern, bodies: comp.bodies, cutouts: comp.cutouts, mounted: comp.mounted, leds: comp.circuit?.ledCount };
+    },
+  },
+
+  validate_structure: {
+    desc: 'Engineer-grade physical check: mass, center of mass, support (no floating parts), tip-over stability and interference. Auto-fixes what is safe; returns the rest.',
+    params: {},
+    run: () => {
+      const before = validateStructure();
+      const fixed = applyStructureFixes(before.issues);
+      const after = validateStructure();
+      return { mass_g: after.mass, com: after.com, stable: after.stable, autofixed: fixed, issues: after.issues.map((i) => i.msg) };
+    },
+  },
+
+  check_indicators: {
+    desc: 'With the button pressed, report whether each indicator LED actually turns on (functional electrical check).',
+    params: {},
+    run: () => indicatorReport(),
+  },
+
+  validate_manufacture: {
+    desc: 'Check the last composed structure for FDM printability (min wall, bed fit), part-fit tolerances (each part has a hole/cavity), and a BOM + feasibility report.',
+    params: {},
+    run: () => {
+      const spec = getLastSpec();
+      if (!spec) throw new Error('nothing composed yet — run design_structure first');
+      const m = validateManufacture(spec);
+      return { ...m.report, issues: m.issues.map((i) => i.msg) };
+    },
+  },
+
+  validate_integration: {
+    desc: 'Check that each electronic is mounted on a real exterior face, indicators face outward, and nothing is buried in a wall.',
+    params: {},
+    run: () => {
+      const spec = getLastSpec();
+      if (!spec) throw new Error('nothing composed yet — run design_structure first');
+      return { issues: validateIntegration(spec).issues.map((i) => i.msg) };
+    },
+  },
+
+  done: {
+    desc: 'Finish the run. Provide a short summary of what was built.',
+    params: { summary: 'string' },
+    run: ({ summary }) => ({ done: true, summary: summary || 'Done.' }),
+  },
+};
+
+// Compact tool list for the system prompt (name + one-line desc + params).
+export function toolSpec() {
+  return Object.entries(TOOLS)
+    .map(([name, t]) => {
+      const p = Object.keys(t.params || {}).length
+        ? ' args: ' + Object.entries(t.params).map(([k, v]) => `${k} (${v})`).join(', ')
+        : '';
+      return `- ${name}: ${t.desc}${p}`;
+    })
+    .join('\n');
+}
+
+// Execute a single tool call. Returns { ok, result } or { ok:false, error }.
+export async function runTool(name, args = {}) {
+  const tool = TOOLS[name];
+  if (!tool) return { ok: false, error: `unknown tool "${name}"` };
+  try {
+    const result = await tool.run(args || {});
+    return { ok: true, result };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+}

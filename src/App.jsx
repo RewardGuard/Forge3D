@@ -4,14 +4,16 @@ import DesignWorkspace from './panels/DesignWorkspace.jsx';
 import CircuitWorkspace from './panels/CircuitWorkspace.jsx';
 import ExportWorkspace from './panels/ExportWorkspace.jsx';
 import LifeSimWorkspace from './panels/LifeSimWorkspace.jsx';
+import OrchestraPanel from './components/OrchestraPanel.jsx';
 import SettingsButton from './components/SettingsButton.jsx';
 import ProjectButtons from './components/ProjectButtons.jsx';
 import ThemeToggle from './components/ThemeToggle.jsx';
 
 const TABS = [
+  { id: 'orchestra', label: '✦ Orchestra', hint: 'AI director — builds whole projects for you' },
   { id: 'design', label: '3D Design', hint: 'Meshy AI + viewport' },
-  { id: 'circuit', label: 'Circuit Sim', hint: 'Parts, wiring & BOM' },
-  { id: 'export', label: 'Sticker / BOM', hint: 'SVG + bill of materials' },
+  { id: 'circuit', label: 'Circuit', hint: 'Parts, wiring & BOM' },
+  { id: 'export', label: 'Export', hint: 'Sticker SVG + bill of materials' },
   { id: 'lifesim', label: 'Life Sim', hint: 'Run code + real-world physics' },
 ];
 
@@ -19,7 +21,7 @@ const TABS = [
 // renderer also runs under plain `vite` for quick iteration.
 const browserFallback = {
   config: {
-    get: async () => ({ hasMeshyKey: false, hasHfToken: false, hasThingiverseToken: false, hasAnthropicKey: false, hasGeminiKey: false, hasGroqKey: false, hasMistralKey: false, hasOpenrouterKey: false, hasGlmKey: false, provider: 'mock', codeProvider: 'mock', circuitProvider: 'mock' }),
+    get: async () => ({ hasMeshyKey: false, hasHfToken: false, hasThingiverseToken: false, hasAnthropicKey: false, hasGeminiKey: false, hasGroqKey: false, hasMistralKey: false, hasOpenrouterKey: false, hasGlmKey: false, provider: 'mock', codeProvider: 'mock', circuitProvider: 'mock', orchestraDirector: 'base', orchestraVision: 'hf-glm45v', orchestraHeadroom: 'balanced' }),
     setMeshyKey: async () => ({ hasMeshyKey: false }),
     setHfToken: async () => ({ hasHfToken: false }),
     setThingiverseToken: async () => ({ hasThingiverseToken: false }),
@@ -32,6 +34,9 @@ const browserFallback = {
     setProvider: async (provider) => ({ provider }),
     setCodeProvider: async (codeProvider) => ({ codeProvider }),
     setCircuitProvider: async (circuitProvider) => ({ circuitProvider }),
+    setOrchestraDirector: async (orchestraDirector) => ({ orchestraDirector }),
+    setOrchestraVision: async (orchestraVision) => ({ orchestraVision }),
+    setOrchestraHeadroom: async (orchestraHeadroom) => ({ orchestraHeadroom }),
   },
   claude: {
     generate: async ({ prompt }) => ({
@@ -43,6 +48,10 @@ const browserFallback = {
       raw: JSON.stringify({ summary: 'Mock agent (browser preview) — no analysis.', actions: [] }),
     }),
     ask: async () => ({ mock: true, answer: 'Mock mode (browser preview).' }),
+  },
+  orchestra: {
+    think: async () => ({ mock: true, text: JSON.stringify({ thought: 'Browser preview — Orchestra needs the desktop app (Electron) for real planning.', tool: 'done', args: { summary: 'Run Orchestra in the packaged app.' } }) }),
+    vision: async () => ({ mock: true, text: 'Vision preview stub (browser). Run in the desktop app with a Hugging Face token.', model: 'none' }),
   },
   usage: {
     get: async () => ([
@@ -150,6 +159,9 @@ export default function App() {
   const setProvider = useStore((s) => s.setProvider);
   const setCodeProvider = useStore((s) => s.setCodeProvider);
   const setCircuitProvider = useStore((s) => s.setCircuitProvider);
+  const setOrchestraDirector = useStore((s) => s.setOrchestraDirector);
+  const setOrchestraVision = useStore((s) => s.setOrchestraVision);
+  const setOrchestraHeadroom = useStore((s) => s.setOrchestraHeadroom);
   const theme = useStore((s) => s.theme);
 
   useEffect(() => {
@@ -166,8 +178,11 @@ export default function App() {
       setProvider(c.provider || 'mock');
       setCodeProvider(c.codeProvider || 'mock');
       setCircuitProvider(c.circuitProvider || c.codeProvider || 'mock');
+      setOrchestraDirector(c.orchestraDirector || 'base');
+      setOrchestraVision(c.orchestraVision || 'hf-glm45v');
+      setOrchestraHeadroom(c.orchestraHeadroom || 'balanced');
     });
-  }, [setHasMeshyKey, setHasHfToken, setHasThingiverseToken, setHasAnthropicKey, setHasGeminiKey, setHasGroqKey, setHasMistralKey, setHasOpenrouterKey, setHasGlmKey, setProvider, setCodeProvider, setCircuitProvider]);
+  }, [setHasMeshyKey, setHasHfToken, setHasThingiverseToken, setHasAnthropicKey, setHasGeminiKey, setHasGroqKey, setHasMistralKey, setHasOpenrouterKey, setHasGlmKey, setProvider, setCodeProvider, setCircuitProvider, setOrchestraDirector, setOrchestraVision, setOrchestraHeadroom]);
 
   // reflect theme on the root element so CSS variables switch
   useEffect(() => {
@@ -244,6 +259,7 @@ export default function App() {
       </header>
 
       <main className="workspace">
+        {tab === 'orchestra' && <OrchestraPanel />}
         {tab === 'design' && <DesignWorkspace />}
         {tab === 'circuit' && <CircuitWorkspace />}
         {tab === 'export' && <ExportWorkspace />}

@@ -12,10 +12,15 @@ export default function LifeSimWorkspace() {
   const theme = useStore((s) => s.theme);
   const setMeshMaterial = useStore((s) => s.setMeshMaterial);
   const setTab = useStore((s) => s.setTab);
+  // run state + report live in the store so the Orchestra director can drive the
+  // sim ("▶ Run") and read the physics outcome without touching this component.
+  const running = useStore((s) => s.lifeSimRunning);
+  const setRunning = useStore((s) => s.setLifeSimRunning);
+  const setSimReport = useStore((s) => s.setSimReport);
 
   const [hazards, setHazards] = useState([]);
-  const [running, setRunning] = useState(false);
-  const [report, setReport] = useState({});
+  const [report, setReportLocal] = useState({});
+  const setReport = (r) => { setReportLocal(r); setSimReport(r); };
   const [newType, setNewType] = useState('flamethrower');
   const [resetSignal, setResetSignal] = useState(0);
 
@@ -145,7 +150,7 @@ export default function LifeSimWorkspace() {
       <section className="viewport">
         <LifeSimView running={running} hazards={hazards} theme={theme} onReport={setReport} resetSignal={resetSignal} />
         <div className="viewport-overlay row">
-          <button className={'btn ' + (running ? 'danger' : 'primary')} onClick={() => setRunning((r) => !r)}>
+          <button className={'btn ' + (running ? 'danger' : 'primary')} onClick={() => setRunning(!running)}>
             {running ? '❚❚ Pause' : '▶ Run'}
           </button>
           <button className="btn" onClick={reset}>↺ Reset</button>
