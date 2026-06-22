@@ -26,10 +26,29 @@ export default function SettingsButton() {
     if (!open) return;
     setUsage(null);
     window.forge.usage?.get().then(setUsage).catch(() => setUsage([]));
+    setCloudUrlInput(useStore.getState().cloudPairUrl || '');
   }, [open]);
 
   const provider = useStore((s) => s.provider);
   const codeProvider = useStore((s) => s.codeProvider);
+  const orchestraDirector = useStore((s) => s.orchestraDirector);
+  const orchestraHeadroom = useStore((s) => s.orchestraHeadroom);
+  const setOrchestraDirector = useStore((s) => s.setOrchestraDirector);
+  const setOrchestraHeadroom = useStore((s) => s.setOrchestraHeadroom);
+  const bridgeEnabled = useStore((s) => s.bridgeEnabled);
+  const bridgeRunning = useStore((s) => s.bridgeRunning);
+  const bridgePort = useStore((s) => s.bridgePort);
+  const bridgeToken = useStore((s) => s.bridgeToken);
+  const bridgeServerPath = useStore((s) => s.bridgeServerPath);
+  const setBridgeEnabled = useStore((s) => s.setBridgeEnabled);
+  const setBridgeToken = useStore((s) => s.setBridgeToken);
+  const cloudPairEnabled = useStore((s) => s.cloudPairEnabled);
+  const cloudPairUrl = useStore((s) => s.cloudPairUrl);
+  const hasCloudPairToken = useStore((s) => s.hasCloudPairToken);
+  const cloudPairStatus = useStore((s) => s.cloudPairStatus);
+  const setCloudPair = useStore((s) => s.setCloudPair);
+  const [cloudUrlInput, setCloudUrlInput] = useState('');
+  const [cloudTokenInput, setCloudTokenInput] = useState('');
   const hasMeshyKey = useStore((s) => s.hasMeshyKey);
   const hasHfToken = useStore((s) => s.hasHfToken);
   const hasThingiverseToken = useStore((s) => s.hasThingiverseToken);
@@ -120,6 +139,42 @@ export default function SettingsButton() {
   async function chooseCodeProvider(id) {
     await window.forge.config.setCodeProvider(id);
     setCodeProvider(id);
+  }
+  async function chooseOrchestraDirector(id) {
+    await window.forge.config.setOrchestraDirector(id);
+    setOrchestraDirector(id);
+  }
+  async function chooseHeadroom(id) {
+    await window.forge.config.setOrchestraHeadroom(id);
+    setOrchestraHeadroom(id);
+  }
+  async function toggleBridge() {
+    const next = !bridgeEnabled;
+    const res = await window.forge.config.setBridgeEnabled(next);
+    setBridgeEnabled(Boolean(res?.bridgeEnabled ?? next), Boolean(res?.running));
+  }
+  async function generateToken() {
+    const res = await window.forge.config.setBridgeToken('__generate__');
+    setBridgeToken(res?.bridgeToken || '');
+  }
+  async function clearToken() {
+    const res = await window.forge.config.setBridgeToken('');
+    setBridgeToken(res?.bridgeToken || '');
+  }
+  function copyText(text) {
+    if (text) navigator.clipboard?.writeText(text).catch(() => {});
+  }
+  async function applyCloudPairing(enabled) {
+    const url = cloudUrlInput.trim();
+    const token = cloudTokenInput.trim();
+    const res = await window.forge.config.setCloudPairing({ enabled, url, ...(token ? { token } : {}) });
+    setCloudPair({
+      cloudPairEnabled: Boolean(res?.cloudPairEnabled),
+      cloudPairUrl: res?.cloudPairUrl ?? url,
+      hasCloudPairToken: Boolean(res?.hasCloudPairToken),
+      cloudPairStatus: res?.status || 'off',
+    });
+    setCloudTokenInput('');
   }
   async function saveCodeKey(p) {
     const val = (keyInputs[p.id] || '').trim();
@@ -216,6 +271,132 @@ export default function SettingsButton() {
                       </div>
                     </>
                   )}
+                </div>
+              </section>
+
+              {/* ============ ORCHESTRA AI ============ */}
+              <section className="set-section">
+                <h4>Orchestra AI (the director)</h4>
+                <p className="muted small">
+                  Orchestra builds whole projects: it plans, then conducts the other AIs and tests
+                  the result in the Life Sim. Pick the <b>director</b> model that does the planning —
+                  the free Forge3D Cloud base model works with no key.
+                </p>
+                <label className="lbl">Director model (reasoning)</label>
+                <div className="prov-grid">
+                  {CODE_PROVIDERS.map((p) => (
+                    <button
+                      key={p.id}
+                      className={'prov-card' + (orchestraDirector === p.id ? ' on' : '')}
+                      onClick={() => chooseOrchestraDirector(p.id)}
+                    >
+                      <span className="prov-name">{p.name}</span>
+                      <span className={'prov-tag ' + (p.tag === 'PAID' ? 'paid' : 'free')}>{p.tag}</span>
+                      <span className="prov-model">{p.model}</span>
+                      {(p.noKey || p.has) && <span className="prov-check">{p.noKey ? '•' : '✓ key'}</span>}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="lbl">Vision (sees the 3D viewport)</label>
+                <div className="set-card">
+                  <div className="row" style={{ alignItems: 'baseline' }}>
+                    <b>GLM-4.5V</b>
+                    <span className="prov-tag free">FREE</span>
+                    <span className="spacer" />
+                    <span className={'tok ' + (hasHfToken ? 'ok' : '')}>{hasHfToken ? 'HF token ✓' : 'no HF token'}</span>
+                  </div>
+                  <p className="muted small">
+                    Orchestra captures the viewport and asks GLM-4.5V "does this look right?" before moving on.
+                    It runs through the Hugging Face router using your free HF token (set it under <b>3D model generator → Hugging Face</b> below).
+                  </p>
+                  {!hasHfToken && <p className="status">Without a token, Orchestra still builds — it just can't visually confirm steps.</p>}
+                </div>
+
+                <label className="lbl">Token headroom</label>
+                <p className="muted small">Caps how much each run may spend so you can run Orchestra often. Eco = fewest tokens, Max = longest builds.</p>
+                <div className="seg">
+                  {[{ id: 'eco', l: 'Eco' }, { id: 'balanced', l: 'Balanced' }, { id: 'max', l: 'Max' }].map((o) => (
+                    <button key={o.id} className={'seg-btn' + (orchestraHeadroom === o.id ? ' on' : '')} onClick={() => chooseHeadroom(o.id)}>{o.l}</button>
+                  ))}
+                </div>
+
+                <label className="lbl">Let Claude control Forge3D (MCP plugin)</label>
+                <p className="muted small">
+                  Opens a <b>localhost-only</b> bridge so the Claude desktop/chat app can drive Forge3D
+                  through the <code>forge3d-orchestra</code> MCP plugin — design 3D parts, wire circuits,
+                  write firmware and run the Life Sim by chatting with Claude. Off by default.
+                </p>
+                <div className="set-card">
+                  <div className="row" style={{ alignItems: 'baseline' }}>
+                    <b>Control bridge</b>
+                    <span className={'prov-tag ' + (bridgeEnabled ? 'free' : 'paid')}>{bridgeEnabled ? 'ON' : 'OFF'}</span>
+                    <span className="spacer" />
+                    <span className={'tok ' + (bridgeRunning ? 'ok' : '')}>
+                      {bridgeEnabled ? (bridgeRunning ? `listening · 127.0.0.1:${bridgePort}` : 'starting…') : 'disabled'}
+                    </span>
+                  </div>
+                  <div className="seg">
+                    <button className={'seg-btn' + (!bridgeEnabled ? ' on' : '')} onClick={() => bridgeEnabled && toggleBridge()}>Off</button>
+                    <button className={'seg-btn' + (bridgeEnabled ? ' on' : '')} onClick={() => !bridgeEnabled && toggleBridge()}>On</button>
+                  </div>
+
+                  {bridgeEnabled && (
+                    <>
+                      <p className="muted small" style={{ marginTop: 8 }}>
+                        Add this to Claude Desktop's <code>claude_desktop_config.json</code> (or a project <code>.mcp.json</code>), then restart Claude:
+                      </p>
+                      <pre className="code-snippet" style={{ whiteSpace: 'pre-wrap', userSelect: 'all' }}>{
+`"forge3d-orchestra": {
+  "command": "node",
+  "args": ["${bridgeServerPath || '<path-to-forge3d>/server/orchestra-mcp/index.mjs'}"]${bridgeToken ? `,
+  "env": { "FORGE3D_BRIDGE_TOKEN": "${bridgeToken}" }` : ''}
+}`}</pre>
+
+                      <label className="lbl">Shared token (optional)</label>
+                      <p className="muted small">
+                        The bridge is already restricted to your machine. Add a token for an extra lock — both
+                        sides must match (set <code>FORGE3D_BRIDGE_TOKEN</code> in the plugin config above).
+                      </p>
+                      {bridgeToken ? (
+                        <div className="key-row">
+                          <input type="text" readOnly value={bridgeToken} onFocus={(e) => e.target.select()} />
+                          <button className="btn" onClick={() => copyText(bridgeToken)}>Copy</button>
+                          <button className="btn" onClick={clearToken}>Clear</button>
+                        </div>
+                      ) : (
+                        <button className="btn primary" onClick={generateToken}>Generate token</button>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <label className="lbl">Forge3D Cloud — pair this app with the remote connector</label>
+                <p className="muted small">
+                  Lets the <b>hosted</b> Forge3D connector (the one listed in Claude's directory) drive <b>this</b>
+                  running app — live 3D + Life Sim — from anywhere. The app dials <b>out</b> to your cloud server,
+                  so there's no port to open. Without pairing, the cloud connector still designs in the cloud and
+                  returns files. Off by default.
+                </p>
+                <div className="set-card">
+                  <div className="row" style={{ alignItems: 'baseline' }}>
+                    <b>Cloud pairing</b>
+                    <span className={'prov-tag ' + (cloudPairEnabled ? 'free' : 'paid')}>{cloudPairEnabled ? 'ON' : 'OFF'}</span>
+                    <span className="spacer" />
+                    <span className={'tok ' + (cloudPairStatus === 'online' ? 'ok' : '')}>{cloudPairEnabled ? cloudPairStatus : 'disabled'}</span>
+                  </div>
+                  <label className="lbl">Cloud server URL</label>
+                  <input type="text" placeholder="https://your-forge3d-cloud.example.com" value={cloudUrlInput} onChange={(e) => setCloudUrlInput(e.target.value)} />
+                  <label className="lbl">Pairing token {hasCloudPairToken && <span className="muted small">— saved ✓ (leave blank to keep)</span>}</label>
+                  <div className="key-row">
+                    <input type="password" placeholder={hasCloudPairToken ? '•••••••• (unchanged)' : 'FORGE3D_PAIR_TOKEN'} value={cloudTokenInput} onChange={(e) => setCloudTokenInput(e.target.value)} />
+                    {cloudPairEnabled ? (
+                      <button className="btn" onClick={() => applyCloudPairing(false)}>Disconnect</button>
+                    ) : (
+                      <button className="btn primary" onClick={() => applyCloudPairing(true)}>Save &amp; connect</button>
+                    )}
+                  </div>
+                  {cloudPairEnabled && <button className="btn" style={{ marginTop: 6 }} onClick={() => applyCloudPairing(true)}>Reconnect / apply changes</button>}
                 </div>
               </section>
 

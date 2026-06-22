@@ -511,7 +511,7 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
   const fallRef = useRef({ off: {}, vy: {} });
 
   return (
-    <Canvas shadows camera={{ position: [3, 2.2, 3.2], fov: 45 }} dpr={[1, 2]}>
+    <Canvas shadows camera={{ position: [3, 2.2, 3.2], fov: 45 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true }}>
       <color attach="background" args={[bg]} />
       <hemisphereLight intensity={0.45 * light} groundColor={bg} />
       <directionalLight position={[5, 8, 5]} intensity={1.0 * light} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0002} />

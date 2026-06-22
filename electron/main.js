@@ -3,10 +3,16 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import http from 'node:http';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development';
+
+// The live app window — the control bridge needs it to reach the renderer.
+let mainWindow = null;
+const BRIDGE_PORT = Number(process.env.FORGE3D_BRIDGE_PORT) || 8765;
 
 // ---- Config (Meshy API key) stored in userData, never bundled ----
 function configPath() {
@@ -52,7 +58,139 @@ function createWindow() {
   } else {
     win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
+
+  mainWindow = win;
+  win.on('closed', () => { if (mainWindow === win) mainWindow = null; });
 }
+
+// ============================================================================
+// Control bridge — lets the Claude MCP plugin (server/orchestra-mcp) drive the
+// live app. A localhost-only HTTP server receives { name, args } and runs it
+// through the renderer's window.__orchestraRunTool (src/lib/orchestraBridge.js),
+// which is the same execution point the in-app Orchestra director uses.
+//
+// Security: bound to 127.0.0.1, OFF by default behind an explicit Settings
+// toggle, and optionally gated by a shared bearer token (cfg.bridgeToken). See
+// server/orchestra-mcp/BRIDGE.md.
+// ============================================================================
+let bridgeServer = null;
+
+function bridgeStatus() {
+  return { running: Boolean(bridgeServer && bridgeServer.listening), port: BRIDGE_PORT };
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (c) => {
+      body += c;
+      if (body.length > 8 * 1024 * 1024) { reject(new Error('payload too large')); req.destroy(); }
+    });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+// Ask the renderer to execute one tool and wait for its JSON result. The payload
+// is passed as a single JSON string so we never interpolate raw values into the
+// evaluated source; \u2028/\u2029 are escaped because they're legal in JSON but
+// terminate a JS string literal.
+async function runToolInRenderer(name, args) {
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.webContents) {
+    return { ok: false, error: 'Forge3D window is not open.' };
+  }
+  const payload = JSON.stringify({ name, args: args || {} })
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+  const expr = `window.__orchestraRunTool && window.__orchestraRunTool(${JSON.stringify(payload)})`;
+  const out = await mainWindow.webContents.executeJavaScript(expr, true);
+  if (out == null) return { ok: false, error: 'bridge not registered in renderer yet (app still loading?)' };
+  return out;
+}
+
+function startBridge() {
+  if (bridgeServer) return bridgeStatus();
+  const server = http.createServer(async (req, res) => {
+    const send = (code, obj) => {
+      res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    try {
+      if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
+        return send(200, { ok: true, app: 'forge3d', version: app.getVersion(), tokenRequired: Boolean(readConfig().bridgeToken) });
+      }
+      if (req.method !== 'POST' || req.url !== '/tool') return send(404, { ok: false, error: 'not found' });
+
+      const token = readConfig().bridgeToken;
+      if (token) {
+        const auth = req.headers['authorization'] || '';
+        const got = auth.replace(/^Bearer\s+/i, '');
+        if (got !== token) return send(401, { ok: false, error: 'unauthorized — bad or missing bridge token' });
+      }
+
+      const body = await readBody(req);
+      const { name, args } = JSON.parse(body || '{}');
+      if (!name) return send(400, { ok: false, error: 'missing tool name' });
+      const out = await runToolInRenderer(name, args);
+      return send(200, out);
+    } catch (e) {
+      return send(500, { ok: false, error: String(e?.message || e) });
+    }
+  });
+  server.on('error', (e) => {
+    console.error('[bridge] listen error:', e?.message || e);
+    bridgeServer = null;
+  });
+  server.listen(BRIDGE_PORT, '127.0.0.1', () => {
+    console.error(`[bridge] Forge3D control bridge on http://127.0.0.1:${BRIDGE_PORT}`);
+  });
+  bridgeServer = server;
+  return bridgeStatus();
+}
+
+function stopBridge() {
+  if (bridgeServer) { try { bridgeServer.close(); } catch {} bridgeServer = null; }
+  return bridgeStatus();
+}
+
+// ============================================================================
+// Cloud pairing — dial OUT to the Forge3D Cloud relay so the remote directory
+// connector (server/cloud-mcp) can drive THIS live app. Outbound long-poll only,
+// so no inbound port / firewall change is needed. Off by default; opt in from
+// Settings → Forge3D Cloud. Tool calls run through the same runToolInRenderer
+// path the local bridge uses.
+// ============================================================================
+let cloudPair = { running: false, abort: false, status: 'off' };
+const cloudPairStatus = () => ({ running: cloudPair.running, status: cloudPair.status });
+
+async function cloudPairLoop() {
+  const cfg = readConfig();
+  const base = (cfg.cloudPairUrl || '').replace(/\/$/, '');
+  const token = cfg.cloudPairToken || '';
+  if (!base || !token) { cloudPair.status = 'misconfigured'; cloudPair.running = false; return; }
+  cloudPair.running = true; cloudPair.abort = false; cloudPair.status = 'connecting';
+  const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify(body || {}) });
+  try { await post('/relay/hello', {}); cloudPair.status = 'online'; } catch { cloudPair.status = 'unreachable'; }
+  while (!cloudPair.abort) {
+    let call = null;
+    try {
+      const r = await fetch(`${base}/relay/next?token=${encodeURIComponent(token)}`);
+      if (r.status === 401) { cloudPair.status = 'unauthorized'; break; }
+      if (r.status === 204) { cloudPair.status = 'online'; continue; }
+      if (!r.ok) { cloudPair.status = `error ${r.status}`; await sleep(2000); continue; }
+      call = await r.json();
+    } catch { cloudPair.status = 'unreachable'; await sleep(2000); continue; }
+    cloudPair.status = 'online';
+    let result;
+    try { result = await runToolInRenderer(call.name, call.args); }
+    catch (e) { result = { ok: false, error: String(e?.message || e) }; }
+    try { await post('/relay/result', { callId: call.callId, result }); } catch {}
+  }
+  cloudPair.running = false;
+  if (cloudPair.status !== 'unauthorized') cloudPair.status = 'off';
+}
+function startCloudPairing() { if (!cloudPair.running) cloudPairLoop(); return cloudPairStatus(); }
+function stopCloudPairing() { cloudPair.abort = true; cloudPair.running = false; cloudPair.status = 'off'; return cloudPairStatus(); }
 
 // ---- IPC: config ----
 ipcMain.handle('config:get', () => {
@@ -70,7 +208,52 @@ ipcMain.handle('config:get', () => {
     provider: cfg.provider || 'mock',
     codeProvider: cfg.codeProvider || (cfg.anthropicKey ? 'anthropic' : 'mock'),
     circuitProvider: cfg.circuitProvider || cfg.codeProvider || (cfg.anthropicKey ? 'anthropic' : 'mock'),
+    orchestraDirector: cfg.orchestraDirector || 'base',
+    orchestraVision: cfg.orchestraVision || 'hf-glm45v',
+    orchestraHeadroom: cfg.orchestraHeadroom || 'balanced',
+    // ---- Claude control bridge ----
+    bridgeEnabled: Boolean(cfg.bridgeEnabled),
+    bridgePort: BRIDGE_PORT,
+    bridgeRunning: bridgeStatus().running,
+    hasBridgeToken: Boolean(cfg.bridgeToken),
+    bridgeToken: cfg.bridgeToken || '', // localhost-only; shown so it can be pasted into the MCP config
+    bridgeServerPath: path.join(__dirname, '..', 'server', 'orchestra-mcp', 'index.mjs'), // for the copy-paste MCP snippet
+    // ---- Forge3D Cloud pairing (drive this live app from the remote connector) ----
+    cloudPairEnabled: Boolean(cfg.cloudPairEnabled),
+    cloudPairUrl: cfg.cloudPairUrl || '',
+    hasCloudPairToken: Boolean(cfg.cloudPairToken),
+    cloudPairStatus: cloudPairStatus().status,
   };
+});
+// Enable/disable + configure cloud pairing. Pass { enabled, url, token } — token
+// is only overwritten when a non-empty value is provided (so the UI can toggle
+// without re-typing it).
+ipcMain.handle('config:setCloudPairing', (_e, { enabled, url, token } = {}) => {
+  const cfg = readConfig();
+  if (url !== undefined) cfg.cloudPairUrl = (url || '').trim();
+  if (token) cfg.cloudPairToken = String(token).trim();
+  if (enabled !== undefined) cfg.cloudPairEnabled = Boolean(enabled);
+  writeConfig(cfg);
+  if (cfg.cloudPairEnabled) startCloudPairing(); else stopCloudPairing();
+  return { cloudPairEnabled: Boolean(cfg.cloudPairEnabled), cloudPairUrl: cfg.cloudPairUrl || '', hasCloudPairToken: Boolean(cfg.cloudPairToken), ...cloudPairStatus() };
+});
+// Turn the Claude control bridge on/off (off by default). Starting it opens a
+// localhost-only HTTP listener the MCP plugin connects to.
+ipcMain.handle('config:setBridgeEnabled', (_e, enabled) => {
+  const cfg = readConfig();
+  cfg.bridgeEnabled = Boolean(enabled);
+  writeConfig(cfg);
+  if (cfg.bridgeEnabled) startBridge(); else stopBridge();
+  return { bridgeEnabled: cfg.bridgeEnabled, ...bridgeStatus() };
+});
+// Set/clear/generate the optional shared bearer token. Pass '__generate__' to
+// mint a fresh random token, '' to clear it (localhost gate only).
+ipcMain.handle('config:setBridgeToken', (_e, token) => {
+  const cfg = readConfig();
+  if (token === '__generate__') cfg.bridgeToken = crypto.randomBytes(24).toString('hex');
+  else cfg.bridgeToken = (token || '').trim();
+  writeConfig(cfg);
+  return { hasBridgeToken: Boolean(cfg.bridgeToken), bridgeToken: cfg.bridgeToken || '' };
 });
 ipcMain.handle('config:setAnthropicKey', (_e, key) => {
   const cfg = readConfig();
@@ -119,6 +302,24 @@ ipcMain.handle('config:setCircuitProvider', (_e, circuitProvider) => {
   cfg.circuitProvider = circuitProvider;
   writeConfig(cfg);
   return { circuitProvider };
+});
+ipcMain.handle('config:setOrchestraDirector', (_e, orchestraDirector) => {
+  const cfg = readConfig();
+  cfg.orchestraDirector = orchestraDirector;
+  writeConfig(cfg);
+  return { orchestraDirector };
+});
+ipcMain.handle('config:setOrchestraVision', (_e, orchestraVision) => {
+  const cfg = readConfig();
+  cfg.orchestraVision = orchestraVision;
+  writeConfig(cfg);
+  return { orchestraVision };
+});
+ipcMain.handle('config:setOrchestraHeadroom', (_e, orchestraHeadroom) => {
+  const cfg = readConfig();
+  cfg.orchestraHeadroom = orchestraHeadroom;
+  writeConfig(cfg);
+  return { orchestraHeadroom };
 });
 ipcMain.handle('config:setMeshyKey', (_e, key) => {
   const cfg = readConfig();
@@ -291,6 +492,10 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'; // free tier
 const GLM_URL = 'https://api.z.ai/api/paas/v4/chat/completions'; // Zhipu GLM (z.ai)
 const GLM_MODEL = 'glm-4.5-flash'; // free tier model
+// Hugging Face inference router (OpenAI-compatible). Used for the Orchestra
+// VISION check: GLM-4.5V can read a screenshot of the 3D viewport and judge it.
+const HF_ROUTER_URL = 'https://router.huggingface.co/v1/chat/completions';
+const HF_VISION_MODEL = 'zai-org/GLM-4.5V';
 // Forge3D Cloud proxy — the "base model": keys live on our server, no user key.
 const PROXY_URL = process.env.FORGE3D_PROXY || 'http://18.222.194.21:8787';
 
@@ -493,7 +698,7 @@ async function generateText({ cfg, system, userText, provider: forced, maxTokens
   return { text, mock: false, provider: 'anthropic' };
 }
 
-ipcMain.handle('claude:generate', async (_e, { prompt, context, target } = {}) => {
+ipcMain.handle('claude:generate', async (_e, { prompt, context, target, provider: providerOverride } = {}) => {
   const cfg = readConfig();
   const system =
     target === 'rpi5'
@@ -511,7 +716,11 @@ ipcMain.handle('claude:generate', async (_e, { prompt, context, target } = {}) =
     (context ? `Circuit context:\n${context}\n\n` : '') +
     `Task: ${prompt || (target === 'rpi5' ? 'Blink an LED on a GPIO pin.' : 'Blink the onboard LED.')}`;
 
-  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: codeProviderFor(cfg) });
+  // Orchestra passes its director provider so all its delegated work uses ONE
+  // model the user actually has a key for — not the separate (possibly stale)
+  // codeProvider setting.
+  const want = providerOverride ? providerWithKey(providerOverride, cfg) : codeProviderFor(cfg);
+  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: want });
   if (mock) return { code: mockSketch(prompt, target), mock: true, provider: 'mock' };
   return { code: text, mock: false, provider };
 });
@@ -520,7 +729,7 @@ ipcMain.handle('claude:generate', async (_e, { prompt, context, target } = {}) =
 // Receives a text netlist + the parts catalog and returns a JSON proposal of
 // concrete edits (add/remove wires & parts). The renderer asks the user to
 // approve before applying anything to the canvas.
-ipcMain.handle('claude:circuit', async (_e, { prompt, netlist, catalog } = {}) => {
+ipcMain.handle('claude:circuit', async (_e, { prompt, netlist, catalog, provider: providerOverride } = {}) => {
   const cfg = readConfig();
   const system =
     'You are an expert electronics engineer debugging an Arduino/breadboard circuit. ' +
@@ -541,7 +750,9 @@ ipcMain.handle('claude:circuit', async (_e, { prompt, netlist, catalog } = {}) =
 
   // Building a whole circuit can take many actions — give the model plenty of
   // room so the JSON never gets cut off mid-array (truncation = unreadable).
-  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: circuitProviderFor(cfg), maxTokens: 6000 });
+  // An override (from Orchestra) routes this through the user's Orchestra model.
+  const want = providerOverride ? providerWithKey(providerOverride, cfg) : circuitProviderFor(cfg);
+  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: want, maxTokens: 6000 });
   if (mock) {
     return {
       raw: JSON.stringify({
@@ -567,6 +778,58 @@ ipcMain.handle('claude:ask', async (_e, { question, netlist } = {}) => {
   const { text, mock, provider } = await generateText({ cfg, system, userText, provider: circuitProviderFor(cfg), maxTokens: 3000 });
   if (mock) return { answer: 'Mock mode — choose a circuit agent (Groq is free) and add its key in Settings to ask real questions.', mock: true, provider: 'mock' };
   return { answer: text, mock: false, provider };
+});
+
+// ---- IPC: Orchestra director — text reasoning step ----
+// The conductor model plans the build and emits a single tool call as JSON.
+// It routes through the SAME provider router as codegen, so the director can be
+// the free Forge3D Cloud base model, GLM, Gemini, Groq, etc. Kept cheap on
+// purpose (low max_tokens) — Orchestra issues one action at a time.
+ipcMain.handle('orchestra:think', async (_e, { system, userText, maxTokens = 1200 } = {}) => {
+  const cfg = readConfig();
+  const want = providerWithKey(cfg.orchestraDirector || 'base', cfg);
+  const { text, mock, provider } = await generateText({ cfg, system, userText, provider: want, maxTokens });
+  return { text: text || '', mock, provider };
+});
+
+// ---- IPC: Orchestra vision — let the director SEE the viewport ----
+// Sends a downscaled screenshot to GLM-4.5V via the Hugging Face router so the
+// model can confirm the design before the next step ("does this look like a
+// car? are the wheels on the ground?"). Needs the user's free HF token.
+ipcMain.handle('orchestra:vision', async (_e, { prompt, imageDataUrl } = {}) => {
+  const cfg = readConfig();
+  if (!cfg.hfToken) {
+    return {
+      text: 'Vision check skipped — add a free Hugging Face token in Settings so Orchestra can SEE the design with GLM-4.5V.',
+      model: 'none', mock: true,
+    };
+  }
+  if (!imageDataUrl) throw new Error('orchestra:vision needs an image');
+  const res = await fetch(HF_ROUTER_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cfg.hfToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: HF_VISION_MODEL,
+      max_tokens: 600,
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt || 'Describe the image and whether it matches the described goal.' },
+            { type: 'image_url', image_url: { url: imageDataUrl } },
+          ],
+        },
+      ],
+    }),
+  });
+  let data = {};
+  try { data = await res.json(); } catch { /* non-JSON */ }
+  if (!res.ok) throw new Error(friendlyHttpError(res.status, 'GLM-4.5V (Hugging Face)', data?.error?.message || data?.error));
+  let content = data?.choices?.[0]?.message?.content ?? '';
+  // some vision/reasoning models return content as an array of parts
+  if (Array.isArray(content)) content = content.map((c) => c?.text || '').join('').trim();
+  return { text: String(content || '(no answer)'), model: HF_VISION_MODEL };
 });
 
 // ---- IPC: per-provider remaining API credits ----
@@ -827,7 +1090,14 @@ ipcMain.handle('app:openExternal', async (_e, url) => {
 });
 
 app.whenReady().then(() => {
+  // Dev Dock icon (packaged builds use build/icon.icns from the app bundle).
+  if (process.platform === 'darwin' && isDev && app.dock) {
+    try { app.dock.setIcon(path.join(__dirname, '..', 'build', 'icon.png')); } catch {}
+  }
   createWindow();
+  // Bring the control bridge up if the user left it enabled last session.
+  if (readConfig().bridgeEnabled) startBridge();
+  if (readConfig().cloudPairEnabled) startCloudPairing();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -836,3 +1106,5 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
+app.on('before-quit', () => { stopBridge(); stopCloudPairing(); });

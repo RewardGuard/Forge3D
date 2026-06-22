@@ -15,11 +15,21 @@ contextBridge.exposeInMainWorld('forge', {
     setProvider: (provider) => ipcRenderer.invoke('config:setProvider', provider),
     setCodeProvider: (provider) => ipcRenderer.invoke('config:setCodeProvider', provider),
     setCircuitProvider: (provider) => ipcRenderer.invoke('config:setCircuitProvider', provider),
+    setOrchestraDirector: (provider) => ipcRenderer.invoke('config:setOrchestraDirector', provider),
+    setOrchestraVision: (model) => ipcRenderer.invoke('config:setOrchestraVision', model),
+    setOrchestraHeadroom: (level) => ipcRenderer.invoke('config:setOrchestraHeadroom', level),
+    setBridgeEnabled: (enabled) => ipcRenderer.invoke('config:setBridgeEnabled', enabled),
+    setBridgeToken: (token) => ipcRenderer.invoke('config:setBridgeToken', token),
+    setCloudPairing: (opts) => ipcRenderer.invoke('config:setCloudPairing', opts),
   },
   claude: {
     generate: (payload) => ipcRenderer.invoke('claude:generate', payload),
     circuit: (payload) => ipcRenderer.invoke('claude:circuit', payload),
     ask: (payload) => ipcRenderer.invoke('claude:ask', payload),
+  },
+  orchestra: {
+    think: (payload) => ipcRenderer.invoke('orchestra:think', payload),
+    vision: (payload) => ipcRenderer.invoke('orchestra:vision', payload),
   },
   usage: {
     get: () => ipcRenderer.invoke('usage:get'),

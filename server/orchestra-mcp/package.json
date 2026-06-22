@@ -1,0 +1,19 @@
+{
+  "name": "forge3d-orchestra-mcp",
+  "version": "0.1.0",
+  "description": "MCP plugin that lets Claude drive Forge3D's Orchestra (3D design + circuits + Life Sim).",
+  "type": "module",
+  "bin": { "forge3d-orchestra": "index.mjs" },
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs",
+    "test": "node smoke.mjs",
+    "icon": "node make-icon.mjs",
+    "manifest": "node build-manifest.mjs",
+    "bundle": "npm run icon && npm run manifest && npx --yes @anthropic-ai/mcpb@latest pack . forge3d-orchestra.mcpb"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "license": "MIT"
+}

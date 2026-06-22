@@ -387,6 +387,7 @@ export default function Viewport3D() {
       camera={{ position: [2.2, 1.8, 2.6], fov: 45 }}
       onPointerMissed={() => selectMesh(null)}
       dpr={[1, 2]}
+      gl={{ preserveDrawingBuffer: true }}
     >
       <color attach="background" args={[bg]} />
       <SoftShadows size={28} samples={12} focus={0.85} />

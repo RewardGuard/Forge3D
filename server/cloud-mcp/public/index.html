@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forge3D for Claude — Design 3D-printable gadgets from a sentence</title>
+<meta name="description" content="Add Forge3D to Claude in one click. Describe a gadget; get a validated 3D-printable design — geometry, circuit, firmware and BOM.">
+<style>
+  :root{ --bg:#0b0e13; --card:#11151c; --line:#222a36; --txt:#eef2f8; --muted:#9aa7ba; --steel:#c7d0dd; --lava:#ff5a1f; --lava2:#ff7a3c; }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:radial-gradient(1200px 600px at 50% -10%, #161c26 0%, var(--bg) 60%);color:var(--txt);
+       font:16px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;min-height:100vh}
+  .wrap{max-width:760px;margin:0 auto;padding:56px 22px 64px;text-align:center}
+  img.logo{width:132px;height:132px;border-radius:26px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  h1{font-size:2.5rem;margin:.5rem 0 .2rem;letter-spacing:-.02em}
+  .tag{color:var(--muted);font-size:1.15rem;margin:0 0 2rem}
+  .cta{display:inline-flex;align-items:center;gap:.6rem;background:linear-gradient(180deg,var(--lava2),var(--lava));
+       color:#fff;font-weight:700;font-size:1.12rem;text-decoration:none;padding:16px 30px;border-radius:14px;
+       box-shadow:0 10px 30px rgba(255,90,31,.35);transition:transform .08s ease}
+  .cta:active{transform:translateY(1px)}
+  .sub{color:var(--muted);font-size:.9rem;margin-top:.8rem}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:42px 0 8px;text-align:left}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 16px 18px}
+  .num{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:8px;background:#1b2230;color:var(--lava);font-weight:800;margin-bottom:8px}
+  .step b{display:block;margin-bottom:2px}
+  .step p{margin:0;color:var(--muted);font-size:.92rem}
+  .try{margin-top:34px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;text-align:left}
+  .try .lbl{color:var(--muted);font-size:.82rem;text-transform:uppercase;letter-spacing:.08em}
+  .try code{display:block;margin-top:8px;color:var(--steel);font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+  .feat{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:26px 0 0}
+  .chip{background:#141a24;border:1px solid var(--line);color:var(--steel);border-radius:999px;padding:6px 13px;font-size:.86rem}
+  footer{margin-top:40px;color:var(--muted);font-size:.85rem}
+  footer a{color:var(--muted)}
+  @media(max-width:560px){.steps{grid-template-columns:1fr}h1{font-size:2rem}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <img class="logo" src="/logo.png" alt="Forge3D">
+  <h1>Forge3D for Claude</h1>
+  <p class="tag">Describe a gadget — get a validated, 3D-printable design.</p>
+
+  <a class="cta" href="/download/forge3d-cloud.mcpb" download>⬇ Add to Claude Desktop</a>
+  <div class="sub">One file. No account, no setup. Works on macOS &amp; Windows.</div>
+
+  <div class="feat">
+    <span class="chip">3D geometry</span><span class="chip">Auto-wired circuit</span>
+    <span class="chip">Firmware</span><span class="chip">Bill of materials</span><span class="chip">Printability checks</span>
+  </div>
+
+  <div class="steps">
+    <div class="step"><span class="num">1</span><b>Download</b><p>Click the button to get the Forge3D bundle (<code style="display:inline">.mcpb</code>).</p></div>
+    <div class="step"><span class="num">2</span><b>Double-click it</b><p>Claude Desktop opens and shows an Install dialog. Hit <b>Install</b>.</p></div>
+    <div class="step"><span class="num">3</span><b>Chat</b><p>Forge3D appears in the <b>+ → Connectors</b> menu. Ask it to build something.</p></div>
+  </div>
+
+  <div class="try">
+    <span class="lbl">Try asking Claude</span>
+    <code>"design a sumo robot with ultrasonic, 4 motors and an arduino"</code>
+    <code>"a sensor enclosure with 3 status LEDs and a button"</code>
+  </div>
+
+  <footer>
+    Don't have Claude Desktop? <a href="https://claude.ai/download">Get it here</a>.<br>
+    <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · Forge3D runs in the cloud — no install required.
+  </footer>
+</div>
+</body>
+</html>

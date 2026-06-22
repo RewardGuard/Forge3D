@@ -51,6 +51,68 @@ export const useStore = create((set, get) => ({
   simTick: 0, // advances ~1.5Hz while running so code-driven pins can blink
   tickSim: () => set((s) => ({ simTick: s.simTick + 1 })),
 
+  // ---- Life Sim run state (store-backed so Orchestra can drive & read it) ----
+  // The physics engine "Run" toggle used to be local to LifeSimWorkspace; lifting
+  // it here lets the Orchestra director start/stop the sim and read its report.
+  lifeSimRunning: false,
+  setLifeSimRunning: (v) => set({ lifeSimRunning: Boolean(v) }),
+  simReport: {}, // latest physics report: { objects: { id: {temp, integrity, ...} }, _t }
+  setSimReport: (simReport) => set({ simReport: simReport || {} }),
+
+  // ---- Orchestra AI (the director) ----
+  // Orchestra is the conductor: it plans a whole build and delegates to the
+  // existing sub-agents (mesh gen, circuit agent, codegen) and scene actions.
+  // It never wires parts itself — it hands prompts to those agents. The run is
+  // fully observable: every step lands in `orchestraSteps` in real time.
+  orchestraStatus: 'idle', // idle | running | done | error | stopped
+  orchestraGoal: '',
+  orchestraSteps: [], // [{ n, kind, thought, tool, args, result, ok, image, t }]
+  orchestraTokens: 0, // rough token estimate spent this run (headroom meter)
+  orchestraView: 'build', // build | sim — which live viewport the Orchestra stage shows
+  orchestraPhase: '',     // current phase, shown as a live banner over the viewport
+  setOrchestraView: (orchestraView) => set({ orchestraView }),
+  setOrchestraPhase: (orchestraPhase) => set({ orchestraPhase }),
+  orchestraDirector: 'base',     // text provider that plans (free by default)
+  orchestraVision: 'hf-glm45v',  // vision model that inspects screenshots
+  orchestraHeadroom: 'balanced', // eco | balanced | max — token/context budget
+  setOrchestraDirector: (orchestraDirector) => set({ orchestraDirector }),
+  setOrchestraVision: (orchestraVision) => set({ orchestraVision }),
+  setOrchestraHeadroom: (orchestraHeadroom) => set({ orchestraHeadroom }),
+
+  // ---- Claude control bridge (lets the MCP plugin drive the app) ----
+  bridgeEnabled: false,   // OFF by default — the user opts in from Settings
+  bridgePort: 8765,
+  bridgeRunning: false,
+  bridgeToken: '',        // optional shared secret (localhost-only otherwise)
+  hasBridgeToken: false,
+  bridgeServerPath: '',   // absolute path to the MCP server, for the copy-paste snippet
+
+  // ---- Forge3D Cloud pairing (drive this live app from the remote connector) ----
+  cloudPairEnabled: false,
+  cloudPairUrl: '',
+  hasCloudPairToken: false,
+  cloudPairStatus: 'off',  // off | connecting | online | unreachable | unauthorized | misconfigured
+  setCloudPair: (patch) => set((s) => ({ ...s, ...patch })),
+  setBridgeEnabled: (bridgeEnabled, bridgeRunning) =>
+    set((s) => ({ bridgeEnabled, bridgeRunning: bridgeRunning ?? s.bridgeRunning })),
+  setBridgeToken: (bridgeToken) => set({ bridgeToken: bridgeToken || '', hasBridgeToken: Boolean(bridgeToken) }),
+  orchestraStart: (goal) =>
+    set({ orchestraStatus: 'running', orchestraGoal: goal || '', orchestraSteps: [], orchestraTokens: 0, orchestraView: 'build', orchestraPhase: 'Planning…' }),
+  orchestraSetStatus: (orchestraStatus) => set({ orchestraStatus }),
+  orchestraReset: () => set({ orchestraStatus: 'idle', orchestraGoal: '', orchestraSteps: [], orchestraTokens: 0 }),
+  orchestraAddTokens: (n) => set((s) => ({ orchestraTokens: s.orchestraTokens + (Number(n) || 0) })),
+  orchestraAddStep: (step) =>
+    set((s) => ({ orchestraSteps: [...s.orchestraSteps, { n: s.orchestraSteps.length + 1, t: Date.now(), ...step }] })),
+  // patch the most recent step in place (e.g. fill in its result/image once the
+  // tool finishes) without pushing a new timeline entry
+  orchestraPatchLast: (patch) =>
+    set((s) => {
+      if (!s.orchestraSteps.length) return {};
+      const steps = s.orchestraSteps.slice();
+      steps[steps.length - 1] = { ...steps[steps.length - 1], ...patch };
+      return { orchestraSteps: steps };
+    }),
+
   // ---- UI / theme ----
   theme: 'dark', // dark | light
   toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),

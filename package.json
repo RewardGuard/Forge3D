@@ -11,8 +11,11 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
     "build": "vite build",
-    "dist": "npm run build && electron-builder --mac dmg",
-    "start": "cross-env NODE_ENV=development electron ."
+    "icon": "node scripts/make-app-icon.mjs",
+    "dist": "npm run icon && npm run build && electron-builder --mac dmg",
+    "start": "cross-env NODE_ENV=development electron .",
+    "test": "node scripts/benchmark-sim.mjs && node scripts/acceptance-orchestra.mjs",
+    "test:acceptance": "node scripts/acceptance-orchestra.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.0",
@@ -45,6 +48,7 @@
       "output": "release"
     },
     "mac": {
+      "icon": "build/icon.icns",
       "target": [
         {
           "target": "dmg",
@@ -52,6 +56,12 @@
         }
       ],
       "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "icon": "build/icon.png"
     },
     "dmg": {
       "title": "Forge3D Installer"

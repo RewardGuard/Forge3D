@@ -1,0 +1,5 @@
+# Dev-only — keep out of the shipped .mcpb (node_modules IS bundled).
+build-manifest.mjs
+*.mcpb
+.mcpbignore
+.DS_Store
