@@ -78,6 +78,24 @@ export const useStore = create((set, get) => ({
   setOrchestraDirector: (orchestraDirector) => set({ orchestraDirector }),
   setOrchestraVision: (orchestraVision) => set({ orchestraVision }),
   setOrchestraHeadroom: (orchestraHeadroom) => set({ orchestraHeadroom }),
+
+  // ---- Claude control bridge (lets the MCP plugin drive the app) ----
+  bridgeEnabled: false,   // OFF by default — the user opts in from Settings
+  bridgePort: 8765,
+  bridgeRunning: false,
+  bridgeToken: '',        // optional shared secret (localhost-only otherwise)
+  hasBridgeToken: false,
+  bridgeServerPath: '',   // absolute path to the MCP server, for the copy-paste snippet
+
+  // ---- Forge3D Cloud pairing (drive this live app from the remote connector) ----
+  cloudPairEnabled: false,
+  cloudPairUrl: '',
+  hasCloudPairToken: false,
+  cloudPairStatus: 'off',  // off | connecting | online | unreachable | unauthorized | misconfigured
+  setCloudPair: (patch) => set((s) => ({ ...s, ...patch })),
+  setBridgeEnabled: (bridgeEnabled, bridgeRunning) =>
+    set((s) => ({ bridgeEnabled, bridgeRunning: bridgeRunning ?? s.bridgeRunning })),
+  setBridgeToken: (bridgeToken) => set({ bridgeToken: bridgeToken || '', hasBridgeToken: Boolean(bridgeToken) }),
   orchestraStart: (goal) =>
     set({ orchestraStatus: 'running', orchestraGoal: goal || '', orchestraSteps: [], orchestraTokens: 0, orchestraView: 'build', orchestraPhase: 'Planning…' }),
   orchestraSetStatus: (orchestraStatus) => set({ orchestraStatus }),

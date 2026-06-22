@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('forge', {
     setOrchestraDirector: (provider) => ipcRenderer.invoke('config:setOrchestraDirector', provider),
     setOrchestraVision: (model) => ipcRenderer.invoke('config:setOrchestraVision', model),
     setOrchestraHeadroom: (level) => ipcRenderer.invoke('config:setOrchestraHeadroom', level),
+    setBridgeEnabled: (enabled) => ipcRenderer.invoke('config:setBridgeEnabled', enabled),
+    setBridgeToken: (token) => ipcRenderer.invoke('config:setBridgeToken', token),
+    setCloudPairing: (opts) => ipcRenderer.invoke('config:setCloudPairing', opts),
   },
   claude: {
     generate: (payload) => ipcRenderer.invoke('claude:generate', payload),

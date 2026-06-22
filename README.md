@@ -1,4 +1,8 @@
-# Forge3D
+<p align="center">
+  <img src="assets/forge3d-logo.png" alt="Forge3D" width="200" />
+</p>
+
+<h1 align="center">Forge3D</h1>
 
 **Design · Simulate · Fabricate** — a free, open-source desktop app that takes maker projects from idea to physical product:
 
@@ -49,7 +53,10 @@ The hard parts that have a known-right answer (proportions, canonical wiring, fu
 - **Vision** — GLM-4.5V via the Hugging Face router; add a free [HF token](https://huggingface.co/settings/tokens) so Orchestra can confirm steps visually. Without it, it still builds — it just skips the visual check.
 - **Token headroom** — Eco / Balanced / Max caps how much each run may spend (it never resends full history and downscales screenshots), so you can run it often.
 
-The same control surface (`build_blueprint`, `build_circuit`, `check_geometry`, `check_circuit`, `check_motors`, `look`, …) is exposed to **Claude** as an MCP plugin — see [`server/orchestra-mcp/`](server/orchestra-mcp/) — so Claude (Desktop / Code) can drive Forge3D directly.
+The same control surface (`build_blueprint`, `build_circuit`, `check_geometry`, `check_circuit`, `check_motors`, `look`, `screenshot`, `orchestrate`, …) is exposed to **Claude** as an MCP connector, two ways:
+
+- **Local** — [`server/orchestra-mcp/`](server/orchestra-mcp/): a one-click `.mcpb` bundle that drives your running app over a localhost bridge. Enable it with **Settings → Orchestra AI → "Let Claude control Forge3D"** (off by default).
+- **Cloud** — [`server/cloud-mcp/`](server/cloud-mcp/): a hosted, directory-listable remote connector. With no install it runs the engineering engine **server-side** and returns a validated design + BOM; pair your desktop (**Settings → Orchestra AI → Forge3D Cloud**) and it drives your **live** app from anywhere.
 
 ## Develop
 

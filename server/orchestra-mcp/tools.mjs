@@ -32,5 +32,47 @@ export const TOOL_DEFS = [
   { name: 'set_input', description: 'Drive a button (true/false), switch (true/false) or potentiometer (0..1).', inputSchema: { type: 'object', properties: { nodeId: str('input node id'), value: { description: 'bool or 0..1' } }, required: ['nodeId', 'value'] } },
   { name: 'get_sim_report', description: 'Read the latest Life Sim physics report (temperature, integrity, status per object).', inputSchema: { type: 'object', properties: {} } },
   { name: 'look', description: 'Capture the live viewport and ask the vision model about it. Returns the model\'s text verdict and the screenshot.', inputSchema: { type: 'object', properties: { question: str('what to check in the image') }, required: ['question'] } },
-  { name: 'orchestrate', description: 'Hand a full high-level goal to the in-app Orchestra director and let it run the whole multi-step build autonomously.', inputSchema: { type: 'object', properties: { goal: str('the whole project to build') }, required: ['goal'] } },
+  { name: 'screenshot', description: 'Capture the live 3D viewport and return it as an image so YOU can see the current design directly. Use this to check your work before moving on.', inputSchema: { type: 'object', properties: {} } },
+
+  // ---- starter builds + engineering validation (mirror src/lib/orchestraTools.js) ----
+  { name: 'build_blueprint', description: 'Place a correctly-proportioned starter build for a known archetype (chassis, wheels laid flat, etc.). Replaces existing design shapes — use first for a recognized project, then customize.', inputSchema: { type: 'object', properties: { archetype: str('car|robot|lamp') }, required: ['archetype'] } },
+  { name: 'design_structure', description: 'Compose a full structural product (house/enclosure) from a goal: real-scale geometry with CSG cutouts (doors/windows/ports) PLUS electronics mounted on it and wired by function. Use for non-vehicle builds.', inputSchema: { type: 'object', properties: { goal: str('plain-language project description') }, required: ['goal'] } },
+  { name: 'check_geometry', description: 'Validate the 3D geometry (wheel orientation, floating parts, proportions) and auto-fix what is safe. Returns the issues found.', inputSchema: { type: 'object', properties: { archetype: str('car|robot|lamp|generic (optional)') } } },
+  { name: 'check_circuit', description: 'Functionally validate the circuit (power, ground, driver, whether motors actually turn when driven). Returns concrete deficiencies — empty means it works.', inputSchema: { type: 'object', properties: { archetype: str('car|robot|lamp|generic (optional)') } } },
+  { name: 'check_motors', description: 'Run the electrical sim with inputs driven (joystick forward) and report whether each motor is active and its direction.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'check_indicators', description: 'With the button pressed, report whether each indicator LED actually turns on (functional electrical check).', inputSchema: { type: 'object', properties: {} } },
+  { name: 'validate_structure', description: 'Engineer-grade physical check: mass, center of mass, support (no floating parts), tip-over stability and interference. Auto-fixes what is safe; returns the rest.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'validate_manufacture', description: 'Check the last composed structure for FDM printability (min wall, bed fit), part-fit tolerances, and a BOM + feasibility report. Run design_structure first.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'validate_integration', description: 'Check that each electronic is mounted on a real exterior face, indicators face outward, and nothing is buried in a wall. Run design_structure first.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'done', description: 'Finish: provide a short summary of what was built.', inputSchema: { type: 'object', properties: { summary: str('what was built') } } },
+
+  { name: 'orchestrate', description: 'Hand a full high-level goal to the in-app Orchestra director and let it run the whole multi-step build autonomously. Returns the final status + a step timeline.', inputSchema: { type: 'object', properties: { goal: str('the whole project to build') }, required: ['goal'] } },
 ];
+
+// ---------------------------------------------------------------------------
+// MCP tool annotations — REQUIRED by Claude's connector-directory review: every
+// tool needs a human `title` plus accurate read-only / destructive hints so the
+// client can reason about safety. (See server/cloud-mcp/SUBMIT.md.)
+// ---------------------------------------------------------------------------
+const TITLES = {
+  get_state: 'Read scene & circuit state', get_netlist: 'Read circuit netlist', parts_catalog: 'List part catalog',
+  add_primitive: 'Add primitive shape', gen_mesh: 'Generate 3D model', move_mesh: 'Move / rotate / scale object',
+  attach_motor: 'Attach object to a motor/parent', set_material: 'Set object material', group: 'Group objects',
+  add_part: 'Add electronic part', build_circuit: 'Build / repair circuit', gen_code: 'Write firmware',
+  project_circuit_3d: 'Project circuit into 3D', set_tab: 'Switch workspace tab', run_sim: 'Start Life Sim',
+  pause_sim: 'Pause Life Sim', set_joystick: 'Set joystick input', set_input: 'Set input value',
+  get_sim_report: 'Read Life Sim report', look: 'Capture viewport & ask vision', screenshot: 'Capture viewport image',
+  build_blueprint: 'Place starter build (replaces shapes)', design_structure: 'Compose full structure',
+  check_geometry: 'Check & auto-fix geometry', check_circuit: 'Check circuit (report)', check_motors: 'Check motors run (report)',
+  check_indicators: 'Check indicator LEDs (report)', validate_structure: 'Validate & auto-fix structure',
+  validate_manufacture: 'Validate manufacturability', validate_integration: 'Validate part integration',
+  done: 'Finish run', orchestrate: 'Build whole project autonomously',
+};
+// pure reads (no scene/state change)
+const READ_ONLY = new Set(['get_state', 'get_netlist', 'parts_catalog', 'get_sim_report', 'look', 'screenshot', 'check_circuit', 'check_motors', 'check_indicators', 'validate_manufacture', 'validate_integration', 'done']);
+// replace/reset existing work
+const DESTRUCTIVE = new Set(['orchestrate', 'build_blueprint', 'design_structure']);
+for (const t of TOOL_DEFS) {
+  const ro = READ_ONLY.has(t.name);
+  t.annotations = { title: TITLES[t.name] || t.name, readOnlyHint: ro, destructiveHint: ro ? false : DESTRUCTIVE.has(t.name) };
+}

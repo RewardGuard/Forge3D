@@ -1,0 +1,19 @@
+{
+  "name": "forge3d-cloud-mcp",
+  "version": "0.1.0",
+  "description": "Forge3D Cloud — remote MCP connector: Cloud Orchestra (headless) + relay to the live desktop when paired.",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs",
+    "setup": "node setup.mjs",
+    "doctor": "node setup.mjs --doctor",
+    "test": "node smoke.mjs",
+    "test:oauth": "node oauth-smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "jose": "^5.9.6"
+  },
+  "license": "MIT"
+}

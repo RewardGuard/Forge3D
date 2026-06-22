@@ -1,0 +1,9 @@
+# Dev-only files — keep them out of the shipped .mcpb bundle.
+# (node_modules IS bundled; do not ignore it.)
+make-icon.mjs
+build-manifest.mjs
+smoke.mjs
+assets/
+*.mcpb
+.mcpbignore
+.DS_Store

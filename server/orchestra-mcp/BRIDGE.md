@@ -1,59 +1,45 @@
-# Phase 2 — the Forge3D control bridge
+# Phase 2 — the Forge3D control bridge ✅ BUILT
 
-The MCP server ([index.mjs](index.mjs)) is done. The remaining piece is a tiny
-local HTTP server **inside the Electron app** that receives `{ name, args }` and
-runs it through the renderer's `runTool(name, args)` (from
-`src/lib/orchestraTools.js`). That function is already the single execution
-point for every Orchestra action, so the bridge is thin.
+The MCP server ([index.mjs](index.mjs)) and the Electron-side bridge are both
+done. This is how a remote Claude actually drives the live app:
 
-## Why a bridge
-
-`runTool` lives in the **renderer** (it touches the zustand store and the
-`window.forge` IPC bridges). The MCP server is a **separate Node process**. The
-bridge is the glue: Electron's **main** process runs the HTTP listener and asks
-the **renderer** to execute the tool via IPC, then returns the result.
-
-## Implementation sketch (electron/main.js)
-
-```js
-import http from 'node:http';
-
-// gated by a Settings toggle ("Allow Claude to control Forge3D")
-function startOrchestraBridge(win) {
-  http.createServer((req, res) => {
-    if (req.method !== 'POST' || req.url !== '/tool') { res.writeHead(404).end(); return; }
-    let body = '';
-    req.on('data', (c) => (body += c));
-    req.on('end', async () => {
-      try {
-        const { name, args } = JSON.parse(body || '{}');
-        // ask the renderer to run the tool and wait for the result
-        const out = await win.webContents.executeJavaScript(
-          `window.__orchestraRunTool(${JSON.stringify(name)}, ${JSON.stringify(args || {})})`
-        );
-        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
-      } catch (e) {
-        res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, error: String(e?.message || e) }));
-      }
-    });
-  }).listen(8765, '127.0.0.1');
-}
+```
+Claude ──stdio(MCP)──▶ forge3d-orchestra ──HTTP──▶ Forge3D bridge ──▶ window.__orchestraRunTool ──▶ runTool()
+        (index.mjs)                       127.0.0.1:8765            (electron/main.js)   (src/lib/orchestraBridge.js)
 ```
 
-## Renderer side (one line, e.g. in src/main.jsx)
+## The pieces (all implemented)
 
-```js
-import { runTool } from './lib/orchestraTools.js';
-window.__orchestraRunTool = (name, args) => runTool(name, args); // returns a Promise
-```
+**Electron main — `electron/main.js`**
+A localhost-only HTTP server (`startBridge` / `stopBridge`) that:
+- `POST /tool  { name, args }` → asks the renderer to run the tool and returns its JSON result.
+- `GET /health` → liveness + whether a token is required.
+- Optional `Authorization: Bearer <token>` gate (`cfg.bridgeToken`).
+- Is **off by default**, started only when the Settings toggle (`cfg.bridgeEnabled`) is on,
+  and restarted on launch if it was left on. Bound to `127.0.0.1`.
 
-For `orchestrate`, route to `runOrchestra(goal)` from `src/lib/orchestra.js`
-instead of `runTool`, and stream steps back over a WebSocket if you want Claude
-to watch live (optional).
+It reaches the renderer with `webContents.executeJavaScript`, passing the call as a
+single JSON string (`\u2028`/`\u2029` escaped) so nothing is interpolated into source.
+
+**Renderer — `src/lib/orchestraBridge.js`** (registered in `src/main.jsx`)
+Exposes `window.__orchestraRunTool(payloadJson)`, the single execution point:
+- `orchestrate` → `runOrchestra(goal)` (the in-app director), returning final status + timeline.
+- `screenshot` → captures the viewport and returns the image so Claude can **see** the design.
+- everything else → `runTool(name, args)` from `src/lib/orchestraTools.js`.
+
+**Settings — `src/components/SettingsButton.jsx`**
+Orchestra AI section → "Let Claude control Forge3D (MCP plugin)": on/off toggle,
+live listening status, a copy-paste MCP config snippet, and an optional shared token.
 
 ## Security
 
-- Bind to `127.0.0.1` only.
-- Put it behind an explicit Settings toggle (off by default).
-- Consider a shared token in the `Authorization` header echoed by the MCP server
-  via an env var.
+- Bound to `127.0.0.1` only — never reachable off the machine.
+- Off by default, behind an explicit Settings toggle.
+- Optional shared token (`Settings → Generate token`, mirror it into the plugin's
+  `FORGE3D_BRIDGE_TOKEN` env). The MCP server forwards it as a Bearer header.
+
+## Test it without Electron
+
+`npm test` (in this folder) runs [smoke.mjs](smoke.mjs): it stands up a mock bridge
+on the same HTTP contract and drives the real MCP server over stdio, asserting the
+full tool list, token forwarding, text results, and image surfacing.

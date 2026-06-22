@@ -6,6 +6,7 @@ import ExportWorkspace from './panels/ExportWorkspace.jsx';
 import LifeSimWorkspace from './panels/LifeSimWorkspace.jsx';
 import OrchestraPanel from './components/OrchestraPanel.jsx';
 import SettingsButton from './components/SettingsButton.jsx';
+import markUrl from './assets/forge3d-mark.png';
 import ProjectButtons from './components/ProjectButtons.jsx';
 import ThemeToggle from './components/ThemeToggle.jsx';
 
@@ -21,7 +22,7 @@ const TABS = [
 // renderer also runs under plain `vite` for quick iteration.
 const browserFallback = {
   config: {
-    get: async () => ({ hasMeshyKey: false, hasHfToken: false, hasThingiverseToken: false, hasAnthropicKey: false, hasGeminiKey: false, hasGroqKey: false, hasMistralKey: false, hasOpenrouterKey: false, hasGlmKey: false, provider: 'mock', codeProvider: 'mock', circuitProvider: 'mock', orchestraDirector: 'base', orchestraVision: 'hf-glm45v', orchestraHeadroom: 'balanced' }),
+    get: async () => ({ hasMeshyKey: false, hasHfToken: false, hasThingiverseToken: false, hasAnthropicKey: false, hasGeminiKey: false, hasGroqKey: false, hasMistralKey: false, hasOpenrouterKey: false, hasGlmKey: false, provider: 'mock', codeProvider: 'mock', circuitProvider: 'mock', orchestraDirector: 'base', orchestraVision: 'hf-glm45v', orchestraHeadroom: 'balanced', bridgeEnabled: false, bridgePort: 8765, bridgeRunning: false, hasBridgeToken: false, bridgeToken: '', bridgeServerPath: '', cloudPairEnabled: false, cloudPairUrl: '', hasCloudPairToken: false, cloudPairStatus: 'off' }),
     setMeshyKey: async () => ({ hasMeshyKey: false }),
     setHfToken: async () => ({ hasHfToken: false }),
     setThingiverseToken: async () => ({ hasThingiverseToken: false }),
@@ -37,6 +38,9 @@ const browserFallback = {
     setOrchestraDirector: async (orchestraDirector) => ({ orchestraDirector }),
     setOrchestraVision: async (orchestraVision) => ({ orchestraVision }),
     setOrchestraHeadroom: async (orchestraHeadroom) => ({ orchestraHeadroom }),
+    setBridgeEnabled: async (bridgeEnabled) => ({ bridgeEnabled, running: false, port: 8765 }),
+    setBridgeToken: async (bridgeToken) => ({ hasBridgeToken: Boolean(bridgeToken && bridgeToken !== '__generate__'), bridgeToken: bridgeToken === '__generate__' ? '' : (bridgeToken || '') }),
+    setCloudPairing: async ({ enabled, url } = {}) => ({ cloudPairEnabled: Boolean(enabled), cloudPairUrl: url || '', hasCloudPairToken: false, running: false, status: 'off (browser preview)' }),
   },
   claude: {
     generate: async ({ prompt }) => ({
@@ -162,6 +166,8 @@ export default function App() {
   const setOrchestraDirector = useStore((s) => s.setOrchestraDirector);
   const setOrchestraVision = useStore((s) => s.setOrchestraVision);
   const setOrchestraHeadroom = useStore((s) => s.setOrchestraHeadroom);
+  const setBridgeEnabled = useStore((s) => s.setBridgeEnabled);
+  const setBridgeToken = useStore((s) => s.setBridgeToken);
   const theme = useStore((s) => s.theme);
 
   useEffect(() => {
@@ -181,8 +187,15 @@ export default function App() {
       setOrchestraDirector(c.orchestraDirector || 'base');
       setOrchestraVision(c.orchestraVision || 'hf-glm45v');
       setOrchestraHeadroom(c.orchestraHeadroom || 'balanced');
+      setBridgeEnabled(Boolean(c.bridgeEnabled), Boolean(c.bridgeRunning));
+      setBridgeToken(c.bridgeToken || '');
+      useStore.setState({
+        bridgePort: c.bridgePort || 8765, bridgeServerPath: c.bridgeServerPath || '',
+        cloudPairEnabled: Boolean(c.cloudPairEnabled), cloudPairUrl: c.cloudPairUrl || '',
+        hasCloudPairToken: Boolean(c.hasCloudPairToken), cloudPairStatus: c.cloudPairStatus || 'off',
+      });
     });
-  }, [setHasMeshyKey, setHasHfToken, setHasThingiverseToken, setHasAnthropicKey, setHasGeminiKey, setHasGroqKey, setHasMistralKey, setHasOpenrouterKey, setHasGlmKey, setProvider, setCodeProvider, setCircuitProvider, setOrchestraDirector, setOrchestraVision, setOrchestraHeadroom]);
+  }, [setHasMeshyKey, setHasHfToken, setHasThingiverseToken, setHasAnthropicKey, setHasGeminiKey, setHasGroqKey, setHasMistralKey, setHasOpenrouterKey, setHasGlmKey, setProvider, setCodeProvider, setCircuitProvider, setOrchestraDirector, setOrchestraVision, setOrchestraHeadroom, setBridgeEnabled, setBridgeToken]);
 
   // reflect theme on the root element so CSS variables switch
   useEffect(() => {
@@ -238,7 +251,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="logo">◆</span> Forge3D
+          <img className="logo-img" src={markUrl} alt="" /> Forge3D
           <span className="tag">design · simulate · fabricate</span>
         </div>
         <nav className="tabs">

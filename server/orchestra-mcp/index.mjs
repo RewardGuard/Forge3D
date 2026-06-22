@@ -22,6 +22,9 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { TOOL_DEFS } from './tools.mjs';
 
 const BRIDGE_URL = process.env.FORGE3D_BRIDGE || 'http://127.0.0.1:8765';
+// Must match cfg.bridgeToken in the app (Settings → Orchestra AI → control bridge).
+// Optional: the bridge is localhost-only, so a token is only an extra lock.
+const BRIDGE_TOKEN = process.env.FORGE3D_BRIDGE_TOKEN || '';
 
 // Forward a tool call to the live Forge3D app over the local bridge.
 async function callForge(name, args) {
@@ -29,7 +32,10 @@ async function callForge(name, args) {
   try {
     res = await fetch(`${BRIDGE_URL}/tool`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        ...(BRIDGE_TOKEN ? { authorization: `Bearer ${BRIDGE_TOKEN}` } : {}),
+      },
       body: JSON.stringify({ name, args: args || {} }),
     });
   } catch {

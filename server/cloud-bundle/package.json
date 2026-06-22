@@ -1,0 +1,15 @@
+{
+  "name": "forge3d-cloud-bundle",
+  "version": "0.1.0",
+  "description": "Zero-config Claude Desktop bundle that proxies to the hosted Forge3D Cloud connector.",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "manifest": "node build-manifest.mjs",
+    "bundle": "node build-manifest.mjs && npx --yes @anthropic-ai/mcpb@latest pack . forge3d-cloud.mcpb"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "license": "MIT"
+}

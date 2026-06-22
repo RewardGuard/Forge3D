@@ -1,0 +1,202 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/dist/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "forge3d-orchestra",
+  "display_name": "Forge3D Orchestra",
+  "version": "0.1.0",
+  "description": "Let Claude drive Forge3D — design 3D parts, wire circuits, write firmware and run the Life Sim.",
+  "long_description": "Connects Claude to the running Forge3D desktop app through its local control bridge. Claude can generate and arrange 3D geometry, hand wiring to the circuit agent, write firmware, capture and SEE the viewport, run the Life Sim, and hand whole goals to the Orchestra director. Enable the bridge first in Forge3D: Settings → Orchestra AI → \"Let Claude control Forge3D\".",
+  "author": {
+    "name": "RewardGuard",
+    "url": "https://github.com/RewardGuard/Forge3D"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RewardGuard/Forge3D"
+  },
+  "homepage": "https://github.com/RewardGuard/Forge3D",
+  "icon": "icon.png",
+  "keywords": [
+    "3d",
+    "3d-printing",
+    "cad",
+    "electronics",
+    "circuits",
+    "simulation",
+    "maker",
+    "forge3d"
+  ],
+  "license": "MIT",
+  "server": {
+    "type": "node",
+    "entry_point": "index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/index.mjs"
+      ],
+      "env": {
+        "FORGE3D_BRIDGE": "${user_config.bridge_url}",
+        "FORGE3D_BRIDGE_TOKEN": "${user_config.bridge_token}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "get_state",
+      "description": "Read a compact snapshot of the scene + circuit + sim state."
+    },
+    {
+      "name": "get_netlist",
+      "description": "Read the circuit as a text netlist (parts, pins, wires, loose pins)."
+    },
+    {
+      "name": "parts_catalog",
+      "description": "List every valid partId you may reference. Call once."
+    },
+    {
+      "name": "add_primitive",
+      "description": "Add a built-in primitive shape (box, sphere, cylinder, cone, pyramid, torus, capsule, plane, tetrahedron, icosahedron) to the 3D scene."
+    },
+    {
+      "name": "gen_mesh",
+      "description": "Generate a 3D model from a prompt with the active generator (Meshy/HF/mock) and add it to the scene."
+    },
+    {
+      "name": "move_mesh",
+      "description": "Reposition / rotate / rescale an existing object by id."
+    },
+    {
+      "name": "attach_motor",
+      "description": "Mount one object onto another so they move as a unit; if one is a motor part it spins the other when powered."
+    },
+    {
+      "name": "set_material",
+      "description": "Set what an object is made of (drives Life Sim durability)."
+    },
+    {
+      "name": "group",
+      "description": "Group several objects so they select/move/fall as one assembly."
+    },
+    {
+      "name": "add_part",
+      "description": "Drop a single electronic part onto the circuit canvas by partId."
+    },
+    {
+      "name": "build_circuit",
+      "description": "Hand a plain-language wiring request to the circuit agent; its add/remove edits are applied automatically. Use this instead of wiring pins by hand."
+    },
+    {
+      "name": "gen_code",
+      "description": "Ask the code agent to write firmware for a microcontroller node and load it into the sim."
+    },
+    {
+      "name": "project_circuit_3d",
+      "description": "Push circuit parts into the 3D scene as real-scale bodies for the Life Sim."
+    },
+    {
+      "name": "set_tab",
+      "description": "Switch the visible workspace (design|circuit|export|lifesim|orchestra)."
+    },
+    {
+      "name": "run_sim",
+      "description": "Switch to the Life Sim and start it (powers the circuit + gravity + spinning motors)."
+    },
+    {
+      "name": "pause_sim",
+      "description": "Pause the Life Sim."
+    },
+    {
+      "name": "set_joystick",
+      "description": "Move a joystick input. x/y are 0..1 (0.5 center, 1 up/right)."
+    },
+    {
+      "name": "set_input",
+      "description": "Drive a button (true/false), switch (true/false) or potentiometer (0..1)."
+    },
+    {
+      "name": "get_sim_report",
+      "description": "Read the latest Life Sim physics report (temperature, integrity, status per object)."
+    },
+    {
+      "name": "look",
+      "description": "Capture the live viewport and ask the vision model about it. Returns the model's text verdict and the screenshot."
+    },
+    {
+      "name": "screenshot",
+      "description": "Capture the live 3D viewport and return it as an image so YOU can see the current design directly. Use this to check your work before moving on."
+    },
+    {
+      "name": "build_blueprint",
+      "description": "Place a correctly-proportioned starter build for a known archetype (chassis, wheels laid flat, etc.). Replaces existing design shapes — use first for a recognized project, then customize."
+    },
+    {
+      "name": "design_structure",
+      "description": "Compose a full structural product (house/enclosure) from a goal: real-scale geometry with CSG cutouts (doors/windows/ports) PLUS electronics mounted on it and wired by function. Use for non-vehicle builds."
+    },
+    {
+      "name": "check_geometry",
+      "description": "Validate the 3D geometry (wheel orientation, floating parts, proportions) and auto-fix what is safe. Returns the issues found."
+    },
+    {
+      "name": "check_circuit",
+      "description": "Functionally validate the circuit (power, ground, driver, whether motors actually turn when driven). Returns concrete deficiencies — empty means it works."
+    },
+    {
+      "name": "check_motors",
+      "description": "Run the electrical sim with inputs driven (joystick forward) and report whether each motor is active and its direction."
+    },
+    {
+      "name": "check_indicators",
+      "description": "With the button pressed, report whether each indicator LED actually turns on (functional electrical check)."
+    },
+    {
+      "name": "validate_structure",
+      "description": "Engineer-grade physical check: mass, center of mass, support (no floating parts), tip-over stability and interference. Auto-fixes what is safe; returns the rest."
+    },
+    {
+      "name": "validate_manufacture",
+      "description": "Check the last composed structure for FDM printability (min wall, bed fit), part-fit tolerances, and a BOM + feasibility report. Run design_structure first."
+    },
+    {
+      "name": "validate_integration",
+      "description": "Check that each electronic is mounted on a real exterior face, indicators face outward, and nothing is buried in a wall. Run design_structure first."
+    },
+    {
+      "name": "done",
+      "description": "Finish: provide a short summary of what was built."
+    },
+    {
+      "name": "orchestrate",
+      "description": "Hand a full high-level goal to the in-app Orchestra director and let it run the whole multi-step build autonomously. Returns the final status + a step timeline."
+    }
+  ],
+  "tools_generated": false,
+  "user_config": {
+    "bridge_url": {
+      "type": "string",
+      "title": "Forge3D bridge URL",
+      "description": "Where the Forge3D desktop app exposes its control bridge. Leave the default unless you changed the port.",
+      "default": "http://127.0.0.1:8765",
+      "required": false
+    },
+    "bridge_token": {
+      "type": "string",
+      "title": "Bridge token (optional)",
+      "description": "Only needed if you generated a token in Forge3D → Settings → Orchestra AI. Paste the same token here.",
+      "default": "",
+      "sensitive": true,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}
