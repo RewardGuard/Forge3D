@@ -159,6 +159,7 @@ const server = http.createServer(async (req, res) => {
         '/privacy': ['privacy.html', 'text/html; charset=utf-8'],
         '/terms': ['terms.html', 'text/html; charset=utf-8'],
         '/logo.png': ['logo.png', 'image/png'],
+        '/install.sh': ['install.sh', 'text/x-shellscript; charset=utf-8'],
         '/download/forge3d-cloud.mcpb': ['forge3d-cloud.mcpb', 'application/octet-stream'],
       };
       const hit = STATIC[url.pathname];
