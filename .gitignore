@@ -5,6 +5,7 @@ release/
 build/*
 !build/icon.png
 !build/icon.icns
+!build/entitlements.mac.plist
 *.mcpb
 
 # local tooling / personal
