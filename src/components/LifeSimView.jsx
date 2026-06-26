@@ -103,8 +103,7 @@ function GravityEngine({ units, running, fallRef }) {
 
   useFrame((_, dtRaw) => {
     const S = fallRef.current;
-    if (!running) { S.off = {}; S.vy = {}; S.rest = {}; return; }
-    if (!S.rest) S.rest = {};
+    if (!running) { S.off = {}; S.vy = {}; return; }
     const dt = Math.min(0.05, dtRaw);
 
     // unit root groups currently in the scene, by unit id
@@ -114,8 +113,11 @@ function GravityEngine({ units, running, fallRef }) {
         (rootsByUnit[o.userData.unitKey] = rootsByUnit[o.userData.unitKey] || []).push(o);
       }
     });
+    const allRoots = Object.values(rootsByUnit).flat();
+    // Re-evaluate every unit every frame (no permanent "settled" flag): an object
+    // resting on another that is itself still falling must keep tracking it down,
+    // otherwise the upper object freezes mid-air when the lower one drops away.
     for (const u of units) {
-      if (S.rest[u.id]) continue; // already settled — cheap steady state
       const roots = rootsByUnit[u.id];
       if (!roots || !roots.length) continue;
 
@@ -130,10 +132,7 @@ function GravityEngine({ units, running, fallRef }) {
       const samples = [[cx, cz], [cx - ex, cz - ez], [cx + ex, cz - ez], [cx - ex, cz + ez], [cx + ex, cz + ez]];
 
       // everything collidable that isn't this unit
-      const others = [];
-      scene.traverse((o) => {
-        if (o.userData?.isUnitRoot && o.userData.collidable && o.userData.unitKey && o.userData.unitKey !== u.id) others.push(o);
-      });
+      const others = allRoots.filter((o) => o.userData.unitKey !== u.id);
 
       // highest real surface under the footprint (ground = 0)
       let restAt = 0;
@@ -149,9 +148,8 @@ function GravityEngine({ units, running, fallRef }) {
       let vy = (S.vy[u.id] ?? 0) - 9.8 * dt;
       let dy = vy * dt;
       if (bottom + dy <= restAt + 1e-3 && vy <= 0) {
-        dy = restAt - bottom; // land exactly on the real surface
+        dy = restAt - bottom; // rest exactly on the real surface (re-checked each frame)
         vy = 0;
-        S.rest[u.id] = true;
       }
       S.off[u.id] = (S.off[u.id] ?? 0) + dy;
       S.vy[u.id] = vy;
