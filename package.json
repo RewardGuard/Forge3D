@@ -13,6 +13,7 @@
     "build": "vite build",
     "icon": "node scripts/make-app-icon.mjs",
     "dist": "npm run icon && npm run build && electron-builder --mac dmg",
+    "dist:signed": "npm run icon && npm run build && electron-builder --mac dmg --config.mac.notarize=true",
     "start": "cross-env NODE_ENV=development electron .",
     "test": "node scripts/benchmark-sim.mjs && node scripts/acceptance-orchestra.mjs",
     "test:acceptance": "node scripts/acceptance-orchestra.mjs"
@@ -55,7 +56,11 @@
           "arch": "arm64"
         }
       ],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "win": {
       "icon": "build/icon.png"
