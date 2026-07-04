@@ -30,7 +30,7 @@ function baseHalf(kind) {
 // using those (not the primitive base) keeps mass/COM/fit honest.
 export function worldAABB(mesh) {
   const h = mesh.kind === 'part' && Array.isArray(mesh.size) ? mesh.size.map((v) => v / 2)
-    : mesh.kind === 'baked' && Array.isArray(mesh.half) ? mesh.half
+    : Array.isArray(mesh.half) ? mesh.half // baked CSG + measured STL imports carry real half-extents
     : baseHalf(mesh.kind);
   const s = scaleArr(mesh.scale);
   const g = new THREE.BoxGeometry(2 * h[0] * s[0], 2 * h[1] * s[1], 2 * h[2] * s[2]);
