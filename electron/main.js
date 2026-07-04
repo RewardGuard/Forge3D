@@ -6,6 +6,7 @@ import os from 'node:os';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { measureSTL } from './stlMeasure.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development';
@@ -929,7 +930,10 @@ ipcMain.handle('thingiverse:import', async (_e, { thingId } = {}) => {
   const safe = String(stl.name || `thing-${thingId}.stl`).replace(/[^\w.\-]+/g, '_');
   const filePath = path.join(cacheDir, `${thingId}-${safe}`);
   fs.writeFileSync(filePath, buf);
-  return { name: stl.name, filePath, bytes: buf }; // buf arrives as Uint8Array in the renderer
+  // Native bounding box (mm by STL convention) so the importer can place the
+  // part at its REAL size — a 157×121×29 mm radiator lands at 157×121×29 mm.
+  const dims_mm = measureSTL(buf);
+  return { name: stl.name, filePath, bytes: buf, dims_mm }; // buf arrives as Uint8Array in the renderer
 });
 
 // ---- IPC: save exported files (SVG / BOM) ----

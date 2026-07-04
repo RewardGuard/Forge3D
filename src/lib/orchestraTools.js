@@ -11,12 +11,12 @@
 import { useStore } from './store.js';
 import { captureViewport } from './capture.js';
 import { buildNetlist, partsCatalog } from './netlist.js';
-import { PART_BY_ID, PARTS, DEFAULT_SHAPE_UNIT } from '../data/parts.js';
+import { PART_BY_ID, PARTS, DEFAULT_SHAPE_UNIT, SCENE_SCALE } from '../data/parts.js';
 import { parseAgentJson } from './agentJson.js';
 import { placeBlueprint, validateGeometry, applyGeometryFixes, BLUEPRINTS } from './orchestraGeometry.js';
 import { motorReport, validateCircuit, indicatorReport } from './orchestraCircuit.js';
 import { detectPattern, seedSpec } from './orchestraSpec.js';
-import { composeSpec, getLastSpec } from './orchestraCompose.js';
+import { composeSpec, getLastSpec, shapeScale } from './orchestraCompose.js';
 import { validateStructure, applyStructureFixes } from './orchestraPhysics.js';
 import { validateManufacture, validateIntegration } from './orchestraManufacture.js';
 
@@ -30,6 +30,7 @@ export function compactCatalog() {
 }
 
 const S = () => useStore.getState();
+const MM = SCENE_SCALE / 1000; // millimetres -> scene units
 const PRIMITIVE_KINDS = ['box', 'sphere', 'cylinder', 'cone', 'pyramid', 'torus', 'capsule', 'plane', 'tetrahedron', 'icosahedron'];
 const MOTORISH = new Set(['dc-motor', 'servo-sg90', 'servo-mg996', 'stepper-28byj', 'stepper-nema17', 'vibration-motor', 'pump-12v', 'linear-actuator']);
 
@@ -103,12 +104,20 @@ export const TOOLS = {
   },
 
   add_primitive: {
-    desc: 'Add a built-in primitive shape to the 3D scene.',
-    params: { kind: `one of ${PRIMITIVE_KINDS.join('|')}`, label: 'string', color: '#hex (optional)' },
-    run: ({ kind = 'box', label, color = '#7c93b8' }) => {
+    desc: 'Add a primitive shape to the 3D scene — with REAL millimetre dimensions per axis if you give size_mm (e.g. a 157×121×29 mm radiator body: {"kind":"box","size_mm":{"w":157,"h":29,"d":121}}).',
+    params: {
+      kind: `one of ${PRIMITIVE_KINDS.join('|')}`, label: 'string', color: '#hex (optional)',
+      size_mm: '{w,h,d} or {r,h} in real millimetres (optional — exact per-axis sizing)',
+      position_mm: '[x,y,z] in millimetres (optional)', rotation: '[x,y,z] radians (optional)',
+    },
+    run: ({ kind = 'box', label, color = '#7c93b8', size_mm, position_mm, rotation }) => {
       if (!PRIMITIVE_KINDS.includes(kind)) throw new Error(`unknown primitive "${kind}"`);
-      const id = addReturningId({ kind, label: label || kind, color, scale: DEFAULT_SHAPE_UNIT });
-      return { id, kind };
+      const mesh = { kind, label: label || kind, color, scale: DEFAULT_SHAPE_UNIT };
+      if (size_mm && typeof size_mm === 'object') mesh.scale = shapeScale(kind, size_mm);
+      if (Array.isArray(position_mm) && position_mm.length === 3) mesh.position = position_mm.map((n) => n * MM);
+      if (Array.isArray(rotation) && rotation.length === 3) mesh.rotation = rotation;
+      const id = addReturningId(mesh);
+      return { id, kind, ...(size_mm ? { size_mm } : {}) };
     },
   },
 
@@ -144,15 +153,68 @@ export const TOOLS = {
     },
   },
 
+  search_thingiverse: {
+    desc: 'Search Thingiverse for real printable parts (radiators, cold plates, pumps, brackets, enclosures…). Returns candidate models to import with import_thingiverse. Needs a Thingiverse token in Settings.',
+    params: { query: 'what to search for, e.g. "120mm radiator" or "water pump housing"' },
+    run: async ({ query }) => {
+      if (!query) throw new Error('search_thingiverse needs a query');
+      const { hits } = await window.forge.thingiverse.search({ term: query, perPage: 10 });
+      if (!hits?.length) return { hits: [], note: 'no results — try a broader term' };
+      return { hits: hits.map((h) => ({ thingId: h.id, name: h.name, by: h.creator })) };
+    },
+  },
+
+  import_thingiverse: {
+    desc: 'Import a Thingiverse model (STL) into the 3D scene AT ITS REAL SIZE — the STL is measured in native millimetres, so a real 157 mm radiator arrives as 157 mm. Override with size_mm (longest dimension) if needed.',
+    params: {
+      thingId: 'id from search_thingiverse', label: 'display name (optional)',
+      size_mm: 'number — force the longest dimension to this many mm (optional; default = native size)',
+      position_mm: '[x,y,z] millimetres (optional)',
+    },
+    run: async ({ thingId, label, size_mm, position_mm }) => {
+      if (!thingId) throw new Error('import_thingiverse needs a thingId');
+      const { bytes, name, dims_mm } = await window.forge.thingiverse.import({ thingId });
+      if (!bytes) throw new Error('Thingiverse returned no STL');
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'model/stl' }));
+      // the viewer normalizes the model to longest-dim = 1 unit (aspect kept),
+      // so a uniform scale of <longest mm> × MM restores its true physical size
+      const native = dims_mm && Math.max(dims_mm.w, dims_mm.h, dims_mm.d) > 0 ? dims_mm : null;
+      const longest = Number(size_mm) > 0 ? Number(size_mm) : native ? Math.max(native.w, native.h, native.d) : 60;
+      const mesh = { kind: 'stl', label: label || name || `thing-${thingId}`, color: '#9aa7bd', modelUrl: blobUrl, scale: longest * MM };
+      if (native) {
+        const mx = Math.max(native.w, native.h, native.d);
+        mesh.half = [native.w / (2 * mx), native.h / (2 * mx), native.d / (2 * mx)]; // honest AABB for the validators
+        mesh.mm = [native.w, native.h, native.d];
+      }
+      if (Array.isArray(position_mm) && position_mm.length === 3) mesh.position = position_mm.map((n) => n * MM);
+      const id = addReturningId(mesh);
+      return { id, name: mesh.label, native_mm: native, placed_longest_mm: longest };
+    },
+  },
+
   move_mesh: {
-    desc: 'Reposition / rotate / rescale an existing object by id.',
-    params: { id: 'mesh id', position: '[x,y,z] (opt)', rotation: '[x,y,z] radians (opt)', scale: 'number (opt)' },
-    run: ({ id, position, rotation, scale }) => {
-      if (!S().meshes.some((m) => m.id === id)) throw new Error(`no mesh "${id}"`);
+    desc: 'Reposition / rotate / resize an existing object by id. size_mm resizes to exact real millimetres per axis; scale accepts a number OR [x,y,z].',
+    params: {
+      id: 'mesh id', position: '[x,y,z] scene units (opt)', position_mm: '[x,y,z] millimetres (opt)',
+      rotation: '[x,y,z] radians (opt)', scale: 'number or [x,y,z] (opt)',
+      size_mm: '{w,h,d} or {r,h} millimetres — exact per-axis resize (opt)',
+    },
+    run: ({ id, position, position_mm, rotation, scale, size_mm }) => {
+      const mesh = S().meshes.find((m) => m.id === id);
+      if (!mesh) throw new Error(`no mesh "${id}"`);
       const patch = {};
-      if (position) patch.position = position;
+      if (Array.isArray(position_mm) && position_mm.length === 3) patch.position = position_mm.map((n) => n * MM);
+      else if (position) patch.position = position;
       if (rotation) patch.rotation = rotation;
-      if (scale != null) patch.scale = scale;
+      if (size_mm && typeof size_mm === 'object') {
+        if (PRIMITIVE_KINDS.includes(mesh.kind)) patch.scale = shapeScale(mesh.kind, size_mm);
+        else {
+          // loaded models (stl/meshy) are normalized to longest-dim = 1 unit,
+          // so the longest requested mm sets a uniform scale (aspect preserved)
+          const longest = Math.max(size_mm.w || 0, size_mm.h || 0, size_mm.d || 0, (size_mm.r || 0) * 2);
+          if (longest > 0) patch.scale = longest * MM;
+        }
+      } else if (scale != null) patch.scale = scale;
       S().updateMesh(id, patch);
       return { id, ...patch };
     },
