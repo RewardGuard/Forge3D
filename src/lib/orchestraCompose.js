@@ -17,8 +17,9 @@ import { synthesizeCircuit } from './orchestraCircuit.js';
 const U = SCENE_SCALE / 1000; // mm → scene units (≈0.012)
 
 // Convert real mm dimensions to a primitive's `scale`, accounting for each
-// primitive's base size in geometryFactory.js.
-function shapeScale(shape, dims = {}, u = U) {
+// primitive's base size in geometryFactory.js. Exported so the action API can
+// offer precise per-axis mm sizing (add_primitive size_mm).
+export function shapeScale(shape, dims = {}, u = U) {
   const w = (dims.w || 0) * u, h = (dims.h || 0) * u, d = (dims.d || 0) * u, r = (dims.r || 0) * u;
   switch (shape) {
     case 'cylinder': return [(r || w / 2) / 0.4, h || 1, (r || d / 2) / 0.4];
