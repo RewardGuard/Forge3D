@@ -42,6 +42,11 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      // CRITICAL for MCP-driven use: when Claude drives Forge3D, this window
+      // sits BEHIND Claude's — Chromium normally pauses rAF for occluded
+      // windows, which froze the 3D canvas (and thus every screenshot/look
+      // capture) for the whole session. Keep rendering in the background.
+      backgroundThrottling: false,
     },
   });
 

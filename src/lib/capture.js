@@ -22,6 +22,26 @@ function activeCanvas() {
   return visible[0] || canvases[0] || null;
 }
 
+// Wait for a painted frame — but NEVER hang: rAF doesn't fire at all in a
+// hidden/throttled page, so a timeout backstop degrades to "capture what's
+// there" instead of blocking the caller forever.
+const nextFrame = () => new Promise((resolve) => {
+  const t = setTimeout(resolve, 120);
+  try { requestAnimationFrame(() => { clearTimeout(t); resolve(); }); } catch { /* keep the timeout */ }
+});
+
+// Like captureViewport, but guarantees the pixels are CURRENT: nudges the
+// renderer (resize invalidates react-three-fiber) and waits two painted frames
+// before reading. Without this, a canvas that stopped painting (tab switch, or
+// an occluded window) returns the same stale frame forever — the "frozen
+// screenshot" a remote Claude hit while driving the app from behind its window.
+export async function captureViewportFresh(headroom = 'balanced') {
+  try { window.dispatchEvent(new Event('resize')); } catch { /* no-op */ }
+  await nextFrame();
+  await nextFrame();
+  return captureViewport(headroom);
+}
+
 // Returns { dataUrl, w, h } or null when no canvas is available (e.g. browser
 // preview before a Canvas mounts). headroom ∈ {eco, balanced, max}.
 export function captureViewport(headroom = 'balanced') {

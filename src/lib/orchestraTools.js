@@ -9,7 +9,7 @@
 // circuit by hand, it hands a prompt to `build_circuit` (the circuit agent).
 // ============================================================================
 import { useStore } from './store.js';
-import { captureViewport } from './capture.js';
+import { captureViewportFresh } from './capture.js';
 import { buildNetlist, partsCatalog } from './netlist.js';
 import { PART_BY_ID, PARTS, DEFAULT_SHAPE_UNIT, SCENE_SCALE } from '../data/parts.js';
 import { parseAgentJson } from './agentJson.js';
@@ -363,7 +363,7 @@ export const TOOLS = {
     params: { question: 'what to check in the image' },
     run: async ({ question }) => {
       const headroom = S().orchestraHeadroom;
-      const shot = captureViewport(headroom);
+      const shot = await captureViewportFresh(headroom);
       if (!shot) return { ok: false, verdict: 'No viewport to capture yet (add/generate an object first).' };
       // stash a thumbnail on the current step so the live panel shows what the model saw
       S().orchestraPatchLast({ image: shot.dataUrl });
@@ -386,10 +386,11 @@ export const TOOLS = {
   },
 
   check_geometry: {
-    desc: 'Validate the 3D geometry (wheel orientation, floating parts, bad proportions) and auto-fix what is safe. Returns the issues found.',
-    params: { archetype: 'car|robot|lamp|generic (optional)' },
-    run: ({ archetype = 'generic' }) => {
+    desc: 'Validate the 3D geometry (wheel orientation, floating parts, bad proportions) and auto-fix what is safe. Pass autofix:false to only report, without moving anything.',
+    params: { archetype: 'car|robot|lamp|generic (optional)', autofix: 'bool — apply safe fixes (default true)' },
+    run: ({ archetype = 'generic', autofix = true } = {}) => {
       const issues = validateGeometry(archetype);
+      if (!autofix) return { found: issues.map((i) => i.msg), autofixed: 0 };
       const fixed = applyGeometryFixes(issues);
       const remaining = validateGeometry(archetype);
       return { found: issues.map((i) => i.msg), autofixed: fixed, remaining: remaining.map((i) => i.msg) };
@@ -421,10 +422,17 @@ export const TOOLS = {
   },
 
   validate_structure: {
-    desc: 'Engineer-grade physical check: mass, center of mass, support (no floating parts), tip-over stability and interference. Auto-fixes what is safe; returns the rest.',
-    params: {},
-    run: () => {
+    desc: 'Engineer-grade physical check: mass, center of mass, support (no floating parts), tip-over stability and interference. REPORT-ONLY by default — nothing is moved. Pass autofix:true to apply the safe fixes (only do this on layouts you did not place by hand).',
+    params: { autofix: 'bool — apply safe fixes (default false: report only)' },
+    run: ({ autofix = false } = {}) => {
       const before = validateStructure();
+      if (!autofix) {
+        return {
+          mass_g: before.mass, com: before.com, stable: before.stable,
+          issues: before.issues.map((i) => i.msg),
+          ...(before.issues.length ? { hint: 'nothing was moved. If parts belong together, attach_motor/group them so gravity treats them as one unit; or re-run with {"autofix":true} to apply safe fixes.' } : {}),
+        };
+      }
       const fixed = applyStructureFixes(before.issues);
       const after = validateStructure();
       return { mass_g: after.mass, com: after.com, stable: after.stable, autofixed: fixed, issues: after.issues.map((i) => i.msg) };
