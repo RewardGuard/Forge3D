@@ -23,7 +23,7 @@
 import { useStore } from './store.js';
 import { parseAgentJson } from './agentJson.js';
 import { compactState, toolSpec, runTool, TOOLS } from './orchestraTools.js';
-import { captureViewport } from './capture.js';
+import { captureViewportFresh } from './capture.js';
 import { classifyGoal, placeBlueprint, validateGeometry, applyGeometryFixes, BLUEPRINTS } from './orchestraGeometry.js';
 import {
   placeArchetypeCircuit, validateCircuit, motorReport, hasBlueprintCircuit,
@@ -65,7 +65,7 @@ async function lookGate(view, question) {
   // the right view and capture from it (no tab switching, you keep watching).
   S().setOrchestraView(view === 'lifesim' ? 'sim' : 'build');
   await sleep(450); // let the Canvas render a frame for preserveDrawingBuffer
-  const shot = captureViewport(S().orchestraHeadroom);
+  const shot = await captureViewportFresh(S().orchestraHeadroom);
   S().orchestraAddStep({ kind: 'action', tool: 'look', args: { view }, thought: question, image: shot?.dataUrl });
   if (!shot) { S().orchestraPatchLast({ result: { verdict: 'no viewport to capture' }, ok: true }); return ''; }
   try {

@@ -19,7 +19,7 @@
 // ============================================================================
 import { runTool } from './orchestraTools.js';
 import { runOrchestra } from './orchestra.js';
-import { captureViewport } from './capture.js';
+import { captureViewportFresh } from './capture.js';
 import { useStore } from './store.js';
 
 // Run a full autonomous build and summarise it for the caller. runOrchestra
@@ -43,8 +43,19 @@ async function doOrchestrate(goal) {
   };
 }
 
-function doScreenshot() {
-  const shot = captureViewport(useStore.getState().orchestraHeadroom || 'balanced');
+async function doScreenshot() {
+  const s = useStore.getState();
+  // a 3D canvas only exists on the design / lifesim / orchestra tabs — if the
+  // app sits on circuit/export, hop to design for the shot and hop back
+  const hasCanvas = typeof document !== 'undefined' && !!document.querySelector('canvas');
+  let restoreTab = null;
+  if (!hasCanvas && s.tab !== 'design') {
+    restoreTab = s.tab;
+    s.setTab('design');
+    await new Promise((r) => setTimeout(r, 450)); // let the Canvas mount + paint
+  }
+  const shot = await captureViewportFresh(s.orchestraHeadroom || 'balanced'); // fresh pixels, never a stale frame
+  if (restoreTab) useStore.getState().setTab(restoreTab);
   if (!shot) return { ok: false, error: 'nothing to capture yet — add or generate an object first' };
   // index.mjs surfaces result.image as an MCP image block, so Claude sees it.
   return { ok: true, result: { image: shot.dataUrl, w: shot.w, h: shot.h } };
