@@ -30,12 +30,20 @@ const nextFrame = () => new Promise((resolve) => {
   try { requestAnimationFrame(() => { clearTimeout(t); resolve(); }); } catch { /* keep the timeout */ }
 });
 
-// Like captureViewport, but guarantees the pixels are CURRENT: nudges the
+// Like captureViewport, but guarantees the pixels are CURRENT and the shot is
+// USEFUL: auto-frames the camera so the WHOLE design is in view (a 345 mm panel
+// otherwise fills the frame and everything else is off-screen), nudges the
 // renderer (resize invalidates react-three-fiber) and waits two painted frames
-// before reading. Without this, a canvas that stopped painting (tab switch, or
-// an occluded window) returns the same stale frame forever — the "frozen
-// screenshot" a remote Claude hit while driving the app from behind its window.
-export async function captureViewportFresh(headroom = 'balanced') {
+// before reading. Without the freshness dance, a canvas that stopped painting
+// (tab switch, or an occluded window) returns the same stale frame forever —
+// the "frozen screenshot" a remote Claude hit while driving the app.
+export async function captureViewportFresh(headroom = 'balanced', { fit = true } = {}) {
+  if (fit) {
+    try {
+      const { fitAllViewports } = await import('./viewportFit.js');
+      fitAllViewports();
+    } catch { /* framing is best-effort; an unframed shot beats none */ }
+  }
   try { window.dispatchEvent(new Event('resize')); } catch { /* no-op */ }
   await nextFrame();
   await nextFrame();

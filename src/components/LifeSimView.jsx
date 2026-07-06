@@ -9,6 +9,7 @@ import { initLifeState, stepLifeState, glowColor, tempColor, HAZARDS, resolveMat
 import { scaleArr } from '../lib/scaleUtil.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 import { simulate } from '../lib/simulate.js';
+import CaptureFramer from './CaptureFramer.jsx';
 
 // Imperative model loader — NEVER suspends, so a slow/dead model URL can't
 // freeze the whole Life Sim render loop (gravity, heat, everything). Returns a
@@ -538,6 +539,7 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
 
       <Engine running={running} hazards={hazards} onReport={onReport} stateRef={stateRef} resetSignal={resetSignal} drivenIds={new Set(Object.keys(spinMeta))} />
       <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
+      <CaptureFramer />
       <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="#cbd5e1" />
       </GizmoHelper>
