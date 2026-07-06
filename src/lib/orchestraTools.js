@@ -109,15 +109,45 @@ export const TOOLS = {
       kind: `one of ${PRIMITIVE_KINDS.join('|')}`, label: 'string', color: '#hex (optional)',
       size_mm: '{w,h,d} or {r,h} in real millimetres (optional — exact per-axis sizing)',
       position_mm: '[x,y,z] in millimetres (optional)', rotation: '[x,y,z] radians (optional)',
+      negative: 'bool — a CUTTING shape: group it with a solid and it carves a hole (or just use cut_hole)',
     },
-    run: ({ kind = 'box', label, color = '#7c93b8', size_mm, position_mm, rotation }) => {
+    run: ({ kind = 'box', label, color = '#7c93b8', size_mm, position_mm, rotation, negative }) => {
       if (!PRIMITIVE_KINDS.includes(kind)) throw new Error(`unknown primitive "${kind}"`);
       const mesh = { kind, label: label || kind, color, scale: DEFAULT_SHAPE_UNIT };
       if (size_mm && typeof size_mm === 'object') mesh.scale = shapeScale(kind, size_mm);
       if (Array.isArray(position_mm) && position_mm.length === 3) mesh.position = position_mm.map((n) => n * MM);
       if (Array.isArray(rotation) && rotation.length === 3) mesh.rotation = rotation;
+      if (negative) mesh.negative = true;
       const id = addReturningId(mesh);
-      return { id, kind, ...(size_mm ? { size_mm } : {}) };
+      return { id, kind, ...(size_mm ? { size_mm } : {}), ...(negative ? { negative: true } : {}) };
+    },
+  },
+
+  cut_hole: {
+    desc: 'Cut a hole/opening into a solid object: creates a negative shape at exact mm size and groups it with the host, so the boolean subtraction renders live. Use for ports, vents, windows, screw holes, cable pass-throughs. Host must be a primitive (not an imported STL/model).',
+    params: {
+      hostId: 'mesh id of the solid to cut into',
+      kind: 'box|cylinder (shape of the hole; cylinder = round hole, default box)',
+      size_mm: '{w,h,d} or {r,h} millimetres — the hole size',
+      position_mm: '[x,y,z] millimetres — hole centre (should overlap the host)',
+      rotation: '[x,y,z] radians (optional — e.g. [1.5708,0,0] for a horizontal round hole)',
+    },
+    run: ({ hostId, kind = 'box', size_mm, position_mm, rotation }) => {
+      const host = S().meshes.find((m) => m.id === hostId);
+      if (!host) throw new Error(`no mesh "${hostId}"`);
+      if ((host.kind === 'meshy' || host.kind === 'stl') && host.modelUrl) throw new Error('cannot cut into an imported model — only primitives support boolean holes');
+      if (!size_mm || typeof size_mm !== 'object') throw new Error('cut_hole needs size_mm');
+      if (!Array.isArray(position_mm) || position_mm.length !== 3) throw new Error('cut_hole needs position_mm [x,y,z]');
+      // the live CSG renderer works per group: reuse the host's group or start one
+      const gid = host.groupId || 'g' + Date.now().toString(36);
+      if (!host.groupId) S().updateMesh(hostId, { groupId: gid });
+      const holeId = addReturningId({
+        kind, label: 'hole', color: '#ef4444', negative: true, groupId: gid,
+        scale: shapeScale(kind, size_mm),
+        position: position_mm.map((n) => n * MM),
+        rotation: Array.isArray(rotation) && rotation.length === 3 ? rotation : [0, 0, 0],
+      });
+      return { holeId, hostId, groupId: gid, size_mm };
     },
   },
 

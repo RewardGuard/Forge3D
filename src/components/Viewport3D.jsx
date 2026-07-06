@@ -11,6 +11,7 @@ import { useStore } from '../lib/store.js';
 import { resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr, packScale } from '../lib/scaleUtil.js';
 import { makeGeometry, bakedGeometry, prepareBrushGeometry } from '../lib/geometryFactory.js';
+import CaptureFramer from './CaptureFramer.jsx';
 
 // PBR hints derived from the mesh's assigned physical material (metal vs not).
 function pbrFor(mesh) {
@@ -435,6 +436,7 @@ export default function Viewport3D() {
       ))}
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
+      <CaptureFramer />
       <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="#cbd5e1" />
       </GizmoHelper>
