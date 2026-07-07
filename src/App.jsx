@@ -67,6 +67,7 @@ const browserFallback = {
     list: async () => ({ projects: [], production: [] }),
     openPath: async () => ({ opened: false }),
     reveal: async () => ({ ok: false }),
+    saveAs: async ({ name }) => ({ saved: true, filePath: `(browser preview) ${name || 'project'}.f3d` }),
   },
   production: {
     export: async () => ({ ok: false, path: '(browser preview — no filesystem)' }),

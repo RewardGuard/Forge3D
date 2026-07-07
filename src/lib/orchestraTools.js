@@ -151,6 +151,48 @@ export const TOOLS = {
     },
   },
 
+  remove_mesh: {
+    desc: 'Delete objects from the 3D scene by id (works on holes/negatives too). Pass one id or a list.',
+    params: { ids: 'mesh id, or [id, id, …]' },
+    run: ({ ids }) => {
+      const list = Array.isArray(ids) ? ids : [ids];
+      let removed = 0;
+      for (const id of list) {
+        if (S().meshes.some((m) => m.id === id)) { S().removeMesh(id); removed++; }
+      }
+      if (!removed) throw new Error('no matching mesh ids');
+      return { removed };
+    },
+  },
+
+  save_project: {
+    desc: 'Save the current project as a REAL .f3d file into the Forge3D project library (Documents/Forge3D/Projects) — no dialogs. Returns the file path so the user can open or share it.',
+    params: { name: 'file name without extension (e.g. "water-cooled-laptop")' },
+    run: async ({ name }) => {
+      const res = await window.forge.projects.saveAs({ name: name || 'orchestra-project', content: S().serialize() });
+      if (!res?.saved) throw new Error('save failed');
+      return { path: res.filePath };
+    },
+  },
+
+  export_production: {
+    desc: 'Export the full production package — firmware code, printable STL, sticker SVG, BOM + build summary — to Documents/Forge3D/Production/<name>/ (USB-ready). Returns the folder path and file list.',
+    params: { name: 'package name', quality: 'low|medium|high STL quality (optional)' },
+    run: async ({ name, quality }) => {
+      const { buildProductionFiles } = await import('./production.js');
+      const s = S();
+      const pkg = name || 'orchestra-export';
+      const files = await buildProductionFiles({
+        name: pkg, serialize: s.serialize, nodes: s.nodes, wires: s.wires,
+        meshes: s.meshes, codeByNode: s.codeByNode, bom: s.bom(),
+        quality: quality || s.exportQuality || 'medium',
+      });
+      const res = await window.forge.production.export({ name: pkg, files });
+      if (!res?.ok) throw new Error('production export failed');
+      return { path: res.path, files: files.map((f) => f.name) };
+    },
+  },
+
   gen_mesh: {
     desc: 'Generate a 3D model from a text prompt with the active generator (Meshy/HF/mock) and add it to the scene.',
     params: { prompt: 'string', style: 'realistic|sculpture|cartoon (Meshy only)' },

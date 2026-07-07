@@ -1089,6 +1089,18 @@ ipcMain.handle('project:save', async (_e, { content, forceDialog } = {}) => {
   return { saved: true, filePath, inPlace: false };
 });
 
+// Headless save for the control bridge / MCP: writes straight into the project
+// library (Documents/Forge3D/Projects) with NO dialog, so a remote Claude can
+// persist its work as a real .f3d file and tell the user where it is.
+ipcMain.handle('project:saveAs', async (_e, { name, content } = {}) => {
+  fs.mkdirSync(PROJECTS_DIR(), { recursive: true });
+  const safe = String(name || 'project').replace(/\.f3d$/i, '').replace(/[^\w.\- ]+/g, '_').trim() || 'project';
+  const filePath = path.join(PROJECTS_DIR(), `${safe}.f3d`);
+  fs.writeFileSync(filePath, content ?? '', 'utf-8');
+  lastProjectFile = filePath;
+  return { saved: true, filePath };
+});
+
 // Open an external URL (e.g. "Get a free key") in the system browser.
 ipcMain.handle('app:openExternal', async (_e, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
