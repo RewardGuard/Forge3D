@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('forge', {
     list: () => ipcRenderer.invoke('projects:list'),
     openPath: (filePath) => ipcRenderer.invoke('projects:openPath', { filePath }),
     reveal: (filePath) => ipcRenderer.invoke('projects:reveal', { filePath }),
+    saveAs: (opts) => ipcRenderer.invoke('project:saveAs', opts), // dialog-free (bridge/MCP)
   },
   production: {
     export: (payload) => ipcRenderer.invoke('production:export', payload),
