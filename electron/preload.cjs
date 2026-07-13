@@ -27,6 +27,15 @@ contextBridge.exposeInMainWorld('forge', {
     circuit: (payload) => ipcRenderer.invoke('claude:circuit', payload),
     ask: (payload) => ipcRenderer.invoke('claude:ask', payload),
   },
+  account: {
+    signup: (payload) => ipcRenderer.invoke('account:signup', payload),
+    login: (payload) => ipcRenderer.invoke('account:login', payload),
+    logout: () => ipcRenderer.invoke('account:logout'),
+    me: () => ipcRenderer.invoke('account:me'),
+    checkout: () => ipcRenderer.invoke('account:checkout'),
+    portal: () => ipcRenderer.invoke('account:portal'),
+    setCloudAi: (ai) => ipcRenderer.invoke('config:setCloudAi', ai),
+  },
   orchestra: {
     think: (payload) => ipcRenderer.invoke('orchestra:think', payload),
     vision: (payload) => ipcRenderer.invoke('orchestra:vision', payload),

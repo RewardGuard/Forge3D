@@ -57,6 +57,15 @@ const browserFallback = {
     think: async () => ({ mock: true, text: JSON.stringify({ thought: 'Browser preview — Orchestra needs the desktop app (Electron) for real planning.', tool: 'done', args: { summary: 'Run Orchestra in the packaged app.' } }) }),
     vision: async () => ({ mock: true, text: 'Vision preview stub (browser). Run in the desktop app with a Hugging Face token.', model: 'none' }),
   },
+  account: {
+    signup: async () => { throw new Error('Accounts need the desktop app.'); },
+    login: async () => { throw new Error('Accounts need the desktop app.'); },
+    logout: async () => ({ hasAccount: false }),
+    me: async () => ({ hasAccount: false }),
+    checkout: async () => ({ opened: false }),
+    portal: async () => ({ opened: false }),
+    setCloudAi: async (cloudAi) => ({ cloudAi }),
+  },
   usage: {
     get: async () => ([
       { id: 'gemini', name: 'Gemini', hasKey: false, free: true, remaining: '∞', note: 'Free tier' },

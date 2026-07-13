@@ -13,6 +13,103 @@ const QUALITIES = [
   { id: 'high', label: 'High' },
 ];
 
+// ---- F3D Cloud account: free 5k tokens/month on any cloud AI, or Pro $5/month ----
+const CLOUD_AIS = [
+  { id: 'glm', label: 'GLM 4.5 Flash (free tier)' },
+  { id: 'claude', label: 'Claude (Pro)' },
+  { id: 'groq', label: 'Llama 3.3 70B · Groq' },
+  { id: 'gemini', label: 'Gemini 2.0 Flash' },
+  { id: 'mistral', label: 'Codestral · Mistral' },
+];
+
+function AccountSection({ open }) {
+  const [me, setMe] = useState(null);        // null=loading | {hasAccount:false} | account info
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [cloudAi, setCloudAi] = useState('glm');
+
+  const refresh = () => {
+    window.forge.account?.me().then(setMe).catch(() => setMe({ hasAccount: false }));
+    window.forge.config.get().then((c) => setCloudAi(c.cloudAi || 'glm')).catch(() => {});
+  };
+  useEffect(() => { if (open) { setMsg(''); refresh(); } }, [open]);
+
+  async function run(fn, okMsg) {
+    setBusy(true); setMsg('');
+    try { await fn(); if (okMsg) setMsg(okMsg); refresh(); }
+    catch (e) { setMsg(String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
+    setBusy(false);
+  }
+
+  const signedIn = me?.hasAccount && me?.email;
+  const pct = signedIn && me.usage ? Math.min(100, Math.round((me.usage.used / me.usage.limit) * 100)) : 0;
+
+  return (
+    <section className="set-section">
+      <h4>F3D Cloud account</h4>
+      {!signedIn && (
+        <>
+          <p className="muted small">
+            One account, three ways to use AI: <b>5,000 free tokens/month</b> on any F3D Cloud AI ·
+            <b> Pro ($5/month)</b> for all cloud AIs · or skip the cloud and <b>enter your own API keys</b> below.
+          </p>
+          <input type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={busy} />
+          <input type="password" placeholder="password (min 8 characters)" value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy} style={{ marginTop: 6 }} />
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn primary" disabled={busy || !email || password.length < 8}
+              onClick={() => run(() => window.forge.account.signup({ email, password }), 'Account created — you have 5,000 free tokens this month.')}>
+              Create account
+            </button>
+            <button className="btn" disabled={busy || !email || !password}
+              onClick={() => run(() => window.forge.account.login({ email, password }), 'Signed in.')}>
+              Sign in
+            </button>
+          </div>
+          {me?.hasAccount === false && <p className="muted small" style={{ marginTop: 6 }}>Not signed in — F3D Cloud (the “base” model) needs an account.</p>}
+        </>
+      )}
+      {signedIn && (
+        <>
+          <p className="small" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <b>{me.email}</b>
+            <span className={'badge ' + (me.plan === 'pro' ? 'orc-badge-done' : '')}>{me.plan === 'pro' ? 'PRO' : 'FREE'}</span>
+          </p>
+          {me.usage && (
+            <div className="orc-meter" style={{ marginTop: 4 }}>
+              <div className="orc-meter-bar"><i style={{ width: pct + '%' }} className={pct > 85 ? 'hot' : ''} /></div>
+              <span className="muted small">{me.usage.used.toLocaleString()} / {me.usage.limit.toLocaleString()} tokens this month{me.plan !== 'pro' ? ' (free)' : ''}</span>
+            </div>
+          )}
+          <label className="lbl" style={{ marginTop: 8 }}>Cloud AI (used by “Forge3D Cloud (base)”)</label>
+          <select value={cloudAi} onChange={(e) => { setCloudAi(e.target.value); window.forge.account.setCloudAi(e.target.value); }}>
+            {CLOUD_AIS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+          </select>
+          <div className="row" style={{ marginTop: 8 }}>
+            {me.plan !== 'pro' && (
+              <button className="btn primary" disabled={busy || me.billing?.configured === false}
+                title={me.billing?.configured === false ? 'Billing is being set up on the server' : 'All F3D Cloud AIs, $5/month'}
+                onClick={() => run(() => window.forge.account.checkout(), 'Checkout opened in your browser — finish there and come back.')}>
+                ✦ Upgrade to Pro — $5/month
+              </button>
+            )}
+            {me.plan === 'pro' && (
+              <button className="btn" disabled={busy}
+                onClick={() => run(() => window.forge.account.portal(), 'Subscription portal opened in your browser.')}>
+                Manage subscription
+              </button>
+            )}
+            <button className="btn" disabled={busy} onClick={() => run(() => window.forge.account.logout())}>Sign out</button>
+          </div>
+          {me.error && <p className="status error small">Couldn’t reach F3D Cloud: {me.error}</p>}
+        </>
+      )}
+      {msg && <p className="status small" style={{ marginTop: 6 }}>{msg}</p>}
+    </section>
+  );
+}
+
 export default function SettingsButton() {
   const [open, setOpen] = useState(false);
   const [meshyKey, setMeshyKey] = useState('');
@@ -216,6 +313,9 @@ export default function SettingsButton() {
             </div>
 
             <div className="modal-body">
+              {/* ============ F3D CLOUD ACCOUNT ============ */}
+              <AccountSection open={open} />
+
               {/* ============ AI CODE GENERATION ============ */}
               <section className="set-section">
                 <h4>AI code generation</h4>

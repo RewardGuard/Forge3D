@@ -229,7 +229,73 @@ ipcMain.handle('config:get', () => {
     cloudPairUrl: cfg.cloudPairUrl || '',
     hasCloudPairToken: Boolean(cfg.cloudPairToken),
     cloudPairStatus: cloudPairStatus().status,
+    // ---- F3D Cloud account (free 5k tokens/month, or Pro $5/month) ----
+    hasAccount: Boolean(cfg.accountToken),
+    accountEmail: cfg.accountEmail || '',
+    cloudAi: cfg.cloudAi || 'glm', // which cloud AI 'base' uses (glm free-tier default)
   };
+});
+
+// ---- F3D Cloud account: signup / login / usage / billing ----
+async function cloudApi(pathname, { method = 'GET', body, token } = {}) {
+  const res = await fetch(`${PROXY_URL}${pathname}`, {
+    method,
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `F3D Cloud error ${res.status}`);
+  return data;
+}
+ipcMain.handle('account:signup', async (_e, { email, password } = {}) => {
+  const data = await cloudApi('/auth/signup', { method: 'POST', body: { email, password } });
+  const cfg = readConfig();
+  cfg.accountToken = data.token; cfg.accountEmail = data.account?.email || email;
+  writeConfig(cfg);
+  return { hasAccount: true, accountEmail: cfg.accountEmail, account: data.account };
+});
+ipcMain.handle('account:login', async (_e, { email, password } = {}) => {
+  const data = await cloudApi('/auth/login', { method: 'POST', body: { email, password } });
+  const cfg = readConfig();
+  cfg.accountToken = data.token; cfg.accountEmail = data.account?.email || email;
+  writeConfig(cfg);
+  return { hasAccount: true, accountEmail: cfg.accountEmail, account: data.account };
+});
+ipcMain.handle('account:logout', () => {
+  const cfg = readConfig();
+  delete cfg.accountToken; delete cfg.accountEmail;
+  writeConfig(cfg);
+  return { hasAccount: false };
+});
+ipcMain.handle('account:me', async () => {
+  const cfg = readConfig();
+  if (!cfg.accountToken) return { hasAccount: false };
+  try {
+    const me = await cloudApi('/me', { token: cfg.accountToken });
+    return { hasAccount: true, ...me };
+  } catch (e) {
+    return { hasAccount: true, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('account:checkout', async () => {
+  const cfg = readConfig();
+  if (!cfg.accountToken) throw new Error('Sign in first.');
+  const { url } = await cloudApi('/billing/checkout', { method: 'POST', body: {}, token: cfg.accountToken });
+  if (url) await shell.openExternal(url);
+  return { opened: Boolean(url) };
+});
+ipcMain.handle('account:portal', async () => {
+  const cfg = readConfig();
+  if (!cfg.accountToken) throw new Error('Sign in first.');
+  const { url } = await cloudApi('/billing/portal', { method: 'POST', body: {}, token: cfg.accountToken });
+  if (url) await shell.openExternal(url);
+  return { opened: Boolean(url) };
+});
+ipcMain.handle('config:setCloudAi', (_e, cloudAi) => {
+  const cfg = readConfig();
+  cfg.cloudAi = String(cloudAi || 'glm');
+  writeConfig(cfg);
+  return { cloudAi: cfg.cloudAi };
 });
 // Enable/disable + configure cloud pairing. Pass { enabled, url, token } — token
 // is only overwritten when a non-empty value is provided (so the UI can toggle
@@ -507,10 +573,14 @@ const PROXY_URL = process.env.FORGE3D_PROXY || 'http://18.222.194.21:8787';
 
 // Call the cloud proxy (server holds the key). Returns generated text.
 async function proxyGenerate({ system, userText, maxTokens = 2000 }) {
+  const cfg = readConfig();
+  if (!cfg.accountToken) {
+    throw new Error('F3D Cloud needs a free account: open Settings → F3D Cloud Account to sign up (5,000 free tokens/month), or enter your own API key.');
+  }
   const res = await fetch(`${PROXY_URL}/v1/chat`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ system, user: userText, maxTokens }),
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.accountToken}` },
+    body: JSON.stringify({ system, user: userText, maxTokens, provider: cfg.cloudAi || 'glm' }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `Forge3D Cloud error ${res.status}`);
