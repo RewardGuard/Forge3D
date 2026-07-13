@@ -569,7 +569,7 @@ const GLM_MODEL = 'glm-4.5-flash'; // free tier model
 const HF_ROUTER_URL = 'https://router.huggingface.co/v1/chat/completions';
 const HF_VISION_MODEL = 'zai-org/GLM-4.5V';
 // Forge3D Cloud proxy — the "base model": keys live on our server, no user key.
-const PROXY_URL = process.env.FORGE3D_PROXY || 'http://18.222.194.21:8787';
+const PROXY_URL = process.env.FORGE3D_PROXY || 'https://forge3d.duckdns.org/f3d-api';
 
 // Call the cloud proxy (server holds the key). Returns generated text.
 async function proxyGenerate({ system, userText, maxTokens = 2000 }) {
