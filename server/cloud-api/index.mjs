@@ -159,12 +159,26 @@ function stripFences(t) {
 }
 const estimate = (s) => Math.ceil(String(s || '').length / 4);
 
+// Optional Headroom compression: route a provider's upstream through a Headroom
+// proxy (github.com/RewardGuard/headroom) to cut input tokens 60–95%. Off by
+// default — set HEADROOM_URL_<PROVIDER> (e.g. HEADROOM_URL_GLM) to a running
+// Headroom endpoint and this provider's calls go through it; unset = direct.
+const upstreamFor = (p, fallback) => process.env['HEADROOM_URL_' + p.id.toUpperCase()] || fallback;
+// fetch the upstream, but if it's a Headroom override and Headroom is unreachable
+// (connection error, not an HTTP error), retry once DIRECT — so a compression
+// proxy that goes down can never take the live free tier with it.
+async function upstreamFetch(url, direct, opts) {
+  try { return await fetch(url, opts); }
+  catch (e) { if (url !== direct) { console.warn(`[headroom] ${url} unreachable (${e?.message}); falling back direct`); return fetch(direct, opts); } throw e; }
+}
+
 async function callProvider(p, { system, user, maxTokens }) {
   if (process.env.MOCK_UPSTREAM === '1') { // local test mode — no real AI spend
-    return { text: `mock(${p.id}): ok`, tokens: Number(process.env.MOCK_TOKENS) || 2000 };
+    return { text: `mock(${p.id})@${upstreamFor(p, 'direct')}: ok`, tokens: Number(process.env.MOCK_TOKENS) || 2000 };
   }
   if (p.kind === 'anthropic') {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const direct = 'https://api.anthropic.com/v1/messages';
+    const res = await upstreamFetch(upstreamFor(p, direct), direct, {
       method: 'POST',
       headers: { 'x-api-key': process.env[p.env], 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -179,7 +193,7 @@ async function callProvider(p, { system, user, maxTokens }) {
     return { text, tokens };
   }
   // OpenAI-compatible
-  const res = await fetch(p.url, {
+  const res = await upstreamFetch(upstreamFor(p, p.url), p.url, {
     method: 'POST',
     headers: { authorization: `Bearer ${process.env[p.env]}`, 'content-type': 'application/json', ...(p.extra || {}) },
     body: JSON.stringify({
