@@ -1,22 +1,10 @@
 import React, { useEffect } from 'react';
 import { useStore } from './lib/store.js';
-import DesignWorkspace from './panels/DesignWorkspace.jsx';
-import CircuitWorkspace from './panels/CircuitWorkspace.jsx';
-import ExportWorkspace from './panels/ExportWorkspace.jsx';
-import LifeSimWorkspace from './panels/LifeSimWorkspace.jsx';
-import OrchestraPanel from './components/OrchestraPanel.jsx';
-import SettingsButton from './components/SettingsButton.jsx';
-import markUrl from './assets/forge3d-mark.png';
-import ProjectButtons from './components/ProjectButtons.jsx';
-import ThemeToggle from './components/ThemeToggle.jsx';
-
-const TABS = [
-  { id: 'orchestra', label: '✦ Orchestra', hint: 'AI director — builds whole projects for you' },
-  { id: 'design', label: '3D Design', hint: 'Meshy AI + viewport' },
-  { id: 'circuit', label: 'Circuit', hint: 'Parts, wiring & BOM' },
-  { id: 'export', label: 'Export', hint: 'Sticker SVG + bill of materials' },
-  { id: 'lifesim', label: 'Life Sim', hint: 'Run code + real-world physics' },
-];
+import EditorShell from './components/EditorShell.jsx';
+import AuthGate from './components/onboarding/AuthGate.jsx';
+import TutorialOverlay from './components/onboarding/TutorialOverlay.jsx';
+import WelcomeAnnouncement from './components/onboarding/WelcomeAnnouncement.jsx';
+import HomeDashboard from './components/home/HomeDashboard.jsx';
 
 // `window.forge` exists only inside Electron. Provide a browser fallback so the
 // renderer also runs under plain `vite` for quick iteration.
@@ -63,8 +51,27 @@ const browserFallback = {
     logout: async () => ({ hasAccount: false }),
     me: async () => ({ hasAccount: false }),
     checkout: async () => ({ opened: false }),
+    checkoutStorage: async () => ({ opened: false }),
     portal: async () => ({ opened: false }),
+    startTrial: async () => { throw new Error('The free trial needs the desktop app.'); },
     setCloudAi: async (cloudAi) => ({ cloudAi }),
+  },
+  onboarding: {
+    get: async () => { try { return JSON.parse(localStorage.getItem('f3d-onboard') || '{}'); } catch { return {}; } },
+    set: async (patch) => {
+      let cur = {};
+      try { cur = JSON.parse(localStorage.getItem('f3d-onboard') || '{}'); } catch { /* fresh */ }
+      const next = { ...cur, ...patch };
+      try { localStorage.setItem('f3d-onboard', JSON.stringify(next)); } catch { /* private */ }
+      return next;
+    },
+  },
+  device: { fingerprint: async () => ({ deviceId: 'browser-preview' }) },
+  storage: {
+    status: async () => ({ root: '(browser preview)', present: false, capacityBytes: 0, freeBytes: 0, usedBytes: 0 }),
+    add: async () => ({ ok: false }),
+    list: async () => ({ files: [] }),
+    reveal: async () => ({ ok: false }),
   },
   usage: {
     get: async () => ([
@@ -159,8 +166,6 @@ class AppErrorBoundary extends React.Component {
 }
 
 export default function App() {
-  const tab = useStore((s) => s.tab);
-  const setTab = useStore((s) => s.setTab);
   const setHasMeshyKey = useStore((s) => s.setHasMeshyKey);
   const setHasHfToken = useStore((s) => s.setHasHfToken);
   const setHasThingiverseToken = useStore((s) => s.setHasThingiverseToken);
@@ -178,7 +183,11 @@ export default function App() {
   const setOrchestraHeadroom = useStore((s) => s.setOrchestraHeadroom);
   const setBridgeEnabled = useStore((s) => s.setBridgeEnabled);
   const setBridgeToken = useStore((s) => s.setBridgeToken);
+  const setMe = useStore((s) => s.setMe);
+  const setOnboarding = useStore((s) => s.setOnboarding);
+  const setShellView = useStore((s) => s.setShellView);
   const theme = useStore((s) => s.theme);
+  const shellView = useStore((s) => s.shellView);
 
   useEffect(() => {
     window.forge.config.get().then((c) => {
@@ -206,6 +215,28 @@ export default function App() {
       });
     });
   }, [setHasMeshyKey, setHasHfToken, setHasThingiverseToken, setHasAnthropicKey, setHasGeminiKey, setHasGroqKey, setHasMistralKey, setHasOpenrouterKey, setHasGlmKey, setProvider, setCodeProvider, setCircuitProvider, setOrchestraDirector, setOrchestraVision, setOrchestraHeadroom, setBridgeEnabled, setBridgeToken]);
+
+  // ---- boot: load the account + onboarding flags, then pick the entry screen ----
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [me, flags] = await Promise.all([
+        window.forge.account.me().catch(() => ({ hasAccount: false })),
+        window.forge.onboarding.get().catch(() => ({})),
+      ]);
+      if (cancelled) return;
+      setMe(me?.hasAccount ? me : null);
+      setOnboarding({
+        onboarded: Boolean(flags.onboarded),
+        tutorialSeen: Boolean(flags.tutorialSeen),
+        authSkipped: Boolean(flags.authSkipped),
+      });
+      // Returning users (or anyone who has completed onboarding) land on Home.
+      // Brand-new users start at the auth gate.
+      setShellView(flags.onboarded ? 'home' : 'gate');
+    })();
+    return () => { cancelled = true; };
+  }, [setMe, setOnboarding, setShellView]);
 
   // reflect theme on the root element so CSS variables switch
   useEffect(() => {
@@ -258,37 +289,17 @@ export default function App() {
 
   return (
     <AppErrorBoundary>
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <img className="logo-img" src={markUrl} alt="" /> Forge3D
-          <span className="tag">design · simulate · fabricate</span>
-        </div>
-        <nav className="tabs">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              className={'tab' + (tab === t.id ? ' active' : '')}
-              onClick={() => setTab(t.id)}
-              title={t.hint}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-        <ProjectButtons />
-        <ThemeToggle />
-        <SettingsButton />
-      </header>
-
-      <main className="workspace">
-        {tab === 'orchestra' && <OrchestraPanel />}
-        {tab === 'design' && <DesignWorkspace />}
-        {tab === 'circuit' && <CircuitWorkspace />}
-        {tab === 'export' && <ExportWorkspace />}
-        {tab === 'lifesim' && <LifeSimWorkspace />}
-      </main>
-    </div>
+      {shellView === 'boot' && <div className="shell-boot"><span className="spin" /> Loading Forge3D…</div>}
+      {shellView === 'gate' && <AuthGate />}
+      {shellView === 'tutorial' && (
+        <>
+          <EditorShell chromeless />
+          <TutorialOverlay />
+        </>
+      )}
+      {shellView === 'welcome' && <WelcomeAnnouncement />}
+      {shellView === 'home' && <HomeDashboard />}
+      {shellView === 'editor' && <EditorShell />}
     </AppErrorBoundary>
   );
 }

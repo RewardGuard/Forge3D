@@ -24,7 +24,7 @@ Add to `.mcp.json` (get the token: `ssh … sudo cat …/cloud-mcp/.env`):
 {
   "mcpServers": {
     "forge3d": {
-      "url": "https://forge3d.duckdns.org/mcp",
+      "url": "https://forge3d.design/mcp",
       "headers": { "Authorization": "Bearer YOUR_FORGE3D_API_TOKEN" }
     }
   }
@@ -40,12 +40,12 @@ Add to `.mcp.json` (get the token: `ssh … sudo cat …/cloud-mcp/.env`):
 So a cloud request controls your real 3D viewport + Life Sim from anywhere:
 
 - Forge3D → **Settings → Orchestra AI → Forge3D Cloud** →
-  URL `https://forge3d.duckdns.org`, paste your **pairing token** → **Save & connect**.
+  URL `https://forge3d.design`, paste your **pairing token** → **Save & connect**.
 - Status goes `online`. Now `look`, `run_sim`, etc. drive your live app; without a
   paired desktop, the cloud still designs headlessly and returns the spec + BOM.
 
 ## What's where
 
 - **Local bundle** (per-user, offline): [server/orchestra-mcp](server/orchestra-mcp)
-- **Cloud connector** (remote, your box): [server/cloud-mcp](server/cloud-mcp) · live at `https://forge3d.duckdns.org`
+- **Cloud connector** (remote, your box): [server/cloud-mcp](server/cloud-mcp) · live at `https://forge3d.design`
 - **Directory listing** (public, needs OAuth + Team plan): [server/cloud-mcp/SUBMIT.md](server/cloud-mcp/SUBMIT.md)

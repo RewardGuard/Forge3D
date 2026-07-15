@@ -1,6 +1,6 @@
 #!/bin/bash
 # Forge3D — one-line macOS installer (Apple Silicon).
-#   curl -fsSL https://forge3d.duckdns.org/install.sh | bash
+#   curl -fsSL https://forge3d.design/install.sh | bash
 # Downloads the latest build, installs it to /Applications, strips the macOS
 # quarantine flag (so you don't get "Forge3D is damaged"), and launches it.
 set -euo pipefail

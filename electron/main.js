@@ -233,6 +233,10 @@ ipcMain.handle('config:get', () => {
     hasAccount: Boolean(cfg.accountToken),
     accountEmail: cfg.accountEmail || '',
     cloudAi: cfg.cloudAi || 'glm', // which cloud AI 'base' uses (glm free-tier default)
+    // ---- first-run onboarding flags ----
+    onboarded: Boolean(cfg.onboarded),
+    tutorialSeen: Boolean(cfg.tutorialSeen),
+    authSkipped: Boolean(cfg.authSkipped),
   };
 });
 
@@ -291,6 +295,64 @@ ipcMain.handle('account:portal', async () => {
   if (url) await shell.openExternal(url);
   return { opened: Boolean(url) };
 });
+// F3D Storage subscription ($3/mo · 500GB) — separate Stripe price from Pro.
+ipcMain.handle('account:checkoutStorage', async () => {
+  const cfg = readConfig();
+  if (!cfg.accountToken) throw new Error('Sign in first.');
+  const { url } = await cloudApi('/billing/checkout-storage', { method: 'POST', body: {}, token: cfg.accountToken });
+  if (url) await shell.openExternal(url);
+  return { opened: Boolean(url) };
+});
+// Start the 7-day free trial. Sends this machine's fingerprint so the server can
+// refuse a second trial after a delete-and-recreate-account cycle.
+ipcMain.handle('account:startTrial', async () => {
+  const cfg = readConfig();
+  if (!cfg.accountToken) throw new Error('Create a free account first to start the trial.');
+  const deviceId = deviceFingerprint();
+  const data = await cloudApi('/trial/start', { method: 'POST', body: { deviceId }, token: cfg.accountToken });
+  writeTrialLock({ deviceId, startedAt: Date.now() });
+  return { hasAccount: true, ...data };
+});
+
+// ---- Onboarding flags (first-run screens) ----
+const ONBOARD_KEYS = ['onboarded', 'tutorialSeen', 'authSkipped'];
+const onboardingOf = (cfg) => Object.fromEntries(ONBOARD_KEYS.map((k) => [k, Boolean(cfg[k])]));
+ipcMain.handle('onboarding:get', () => onboardingOf(readConfig()));
+ipcMain.handle('onboarding:set', (_e, patch = {}) => {
+  const cfg = readConfig();
+  for (const k of ONBOARD_KEYS) if (patch[k] !== undefined) cfg[k] = Boolean(patch[k]);
+  writeConfig(cfg);
+  return onboardingOf(cfg);
+});
+
+// ---- Device fingerprint + persistent trial "cookie" (anti-abuse) ----
+// A stable id derived from hardware: it recomputes identically even after the
+// app config is deleted, so wiping the account can't grant a fresh free trial.
+function deviceFingerprint() {
+  let mac = '';
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (!ni.internal && ni.mac && ni.mac !== '00:00:00:00:00:00') { mac = ni.mac; break; }
+    }
+    if (mac) break;
+  }
+  const raw = [mac, os.hostname(), os.platform(), os.arch(), os.cpus()[0]?.model || ''].join('|');
+  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32);
+}
+// The local "cookie": written to userData AND (if mounted) the F3D Storage volume
+// so it survives a config wipe. The server ledger is the real guard; this is a hint.
+function trialLockPaths() {
+  const paths = [path.join(app.getPath('userData'), 'trial.lock')];
+  const vol = storageRoot();
+  if (vol.present) paths.push(path.join(vol.root, '.f3d-trial.lock'));
+  return paths;
+}
+function writeTrialLock(data) {
+  for (const p of trialLockPaths()) {
+    try { fs.writeFileSync(p, JSON.stringify(data)); } catch { /* volume absent/read-only */ }
+  }
+}
+ipcMain.handle('device:fingerprint', () => ({ deviceId: deviceFingerprint() }));
 ipcMain.handle('config:setCloudAi', (_e, cloudAi) => {
   const cfg = readConfig();
   cfg.cloudAi = String(cloudAi || 'glm');
@@ -569,7 +631,7 @@ const GLM_MODEL = 'glm-4.5-flash'; // free tier model
 const HF_ROUTER_URL = 'https://router.huggingface.co/v1/chat/completions';
 const HF_VISION_MODEL = 'zai-org/GLM-4.5V';
 // Forge3D Cloud proxy — the "base model": keys live on our server, no user key.
-const PROXY_URL = process.env.FORGE3D_PROXY || 'https://forge3d.duckdns.org/f3d-api';
+const PROXY_URL = process.env.FORGE3D_PROXY || 'https://forge3d.design/f3d-api';
 
 // Call the cloud proxy (server holds the key). Returns generated text.
 async function proxyGenerate({ system, userText, maxTokens = 2000 }) {
@@ -1031,6 +1093,62 @@ function dirSize(p) {
   }
   return total;
 }
+
+// ---- F3D Storage: a dedicated local volume named "F3D Storage" (the USB), with
+// a graceful fallback to Documents/Forge3D/Storage when the drive isn't mounted.
+// Forge3D NEVER formats or renames a disk — the user prepares the volume manually.
+const STORAGE_VOLUME = '/Volumes/F3D Storage';
+function storageRoot() {
+  const cfg = readConfig();
+  for (const c of [cfg.storageRoot, STORAGE_VOLUME].filter(Boolean)) {
+    try { if (fs.statSync(c).isDirectory()) return { root: c, present: true }; } catch { /* next */ }
+  }
+  return { root: path.join(LIBRARY_ROOT(), 'Storage'), present: false };
+}
+ipcMain.handle('storage:status', () => {
+  const { root, present } = storageRoot();
+  let capacityBytes = 0, freeBytes = 0, usedBytes = 0;
+  try { if (fs.existsSync(root)) usedBytes = dirSize(root); } catch { /* ignore */ }
+  try {
+    const s = fs.statfsSync(present ? root : path.dirname(root));
+    capacityBytes = s.blocks * s.bsize;
+    freeBytes = s.bavail * s.bsize;
+  } catch { /* statfsSync unavailable */ }
+  return { root, present, capacityBytes, freeBytes, usedBytes };
+});
+ipcMain.handle('storage:add', async () => {
+  const { root, present } = storageRoot();
+  fs.mkdirSync(root, { recursive: true });
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Add files to F3D Storage',
+    properties: ['openFile', 'multiSelections'],
+  });
+  if (canceled || !filePaths?.length) return { canceled: true };
+  let count = 0;
+  for (const fp of filePaths) {
+    try { fs.copyFileSync(fp, path.join(root, path.basename(fp))); count++; } catch { /* skip */ }
+  }
+  return { ok: true, count, root, present };
+});
+ipcMain.handle('storage:list', () => {
+  const { root, present } = storageRoot();
+  if (!fs.existsSync(root)) return { files: [], root, present };
+  const files = fs.readdirSync(root, { withFileTypes: true })
+    .filter((e) => !e.name.startsWith('.'))
+    .map((e) => {
+      const p = path.join(root, e.name);
+      const st = fs.statSync(p);
+      return { name: e.name, path: p, size: e.isDirectory() ? null : st.size, isDir: e.isDirectory(), mtime: st.mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+  return { files, root, present };
+});
+ipcMain.handle('storage:reveal', (_e, { filePath } = {}) => {
+  const target = filePath || storageRoot().root;
+  const ok = fs.existsSync(target);
+  if (ok) shell.showItemInFolder(target);
+  return { ok };
+});
 
 ipcMain.handle('projects:list', () => {
   const listDir = (dir, wantExt) => {

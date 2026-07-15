@@ -143,7 +143,7 @@ export default function MeshyPanel() {
 
       <div className="divider" />
       <label className="lbl">Quick primitives</label>
-      <div className="row wrap">
+      <div className="row wrap" data-tut="add-shape">
         {PRIMITIVES.map((p) => (
           <button key={p.kind} className="btn" onClick={() => addMesh({ kind: p.kind, label: p.label, color: p.color, scale: DEFAULT_SHAPE_UNIT })}>
             + {p.label}

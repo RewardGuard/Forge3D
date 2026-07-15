@@ -14,7 +14,36 @@ function persistAppearance(patch) {
   try { localStorage.setItem('f3d-appearance', JSON.stringify(_appearance)); } catch { /* private mode */ }
 }
 
+// first-run flags survive restarts via localStorage (the Electron config is the
+// source of truth in the packaged app; this keeps the vite-only preview sane)
+let _onboard = {};
+try { _onboard = JSON.parse(localStorage.getItem('f3d-onboard') || '{}'); } catch { /* fresh */ }
+function persistOnboard(patch) {
+  _onboard = { ..._onboard, ...patch };
+  try { localStorage.setItem('f3d-onboard', JSON.stringify(_onboard)); } catch { /* private mode */ }
+}
+// pro OR an active trial unlocks everything (and hides ads)
+function computeEntitled(me) {
+  if (!me) return false;
+  return me.plan === 'pro' || Boolean(me.trial?.active);
+}
+
 export const useStore = create((set, get) => ({
+  // ---- app shell / onboarding router ----
+  // boot → gate (auth) → tutorial → welcome → home → editor
+  shellView: 'boot',
+  setShellView: (shellView) => set({ shellView }),
+  // account snapshot from `account:me` (null = offline / not signed in)
+  me: null,
+  entitled: false, // derived from `me` — pro or trial-active
+  adsEnabled: true, // shown at the very bottom until the user is entitled
+  setMe: (me) => set({ me, entitled: computeEntitled(me), adsEnabled: !computeEntitled(me) }),
+  // first-run flags (mirrored to the Electron config through IPC)
+  onboarded: Boolean(_onboard.onboarded),
+  tutorialSeen: Boolean(_onboard.tutorialSeen),
+  authSkipped: Boolean(_onboard.authSkipped),
+  setOnboarding: (patch) => { persistOnboard(patch); set(patch); },
+
   // ---- active workspace tab ----
   tab: 'design', // design | circuit | export
 

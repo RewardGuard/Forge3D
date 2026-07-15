@@ -19,3 +19,7 @@ build/*
 .env.*
 !.env.example
 server/cloud-bundle/manifest.json
+
+# server runtime secrets/state — generated, must never be committed
+.jwt-secret
+server/**/data.json

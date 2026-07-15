@@ -7,11 +7,11 @@ Anthropic reviews and lists them.
 
 | Requirement | Status |
 |---|---|
-| HTTPS remote MCP server (Streamable HTTP) | ✅ `https://forge3d.duckdns.org/mcp` (Caddy + Let's Encrypt) |
+| HTTPS remote MCP server (Streamable HTTP) | ✅ `https://forge3d.design/mcp` (Caddy + Let's Encrypt) |
 | OAuth 2.1 token verification | ✅ implemented in `authOwner()` (jose: sig + iss + aud → `sub`); tested by `npm run test:oauth` |
 | Protected-resource discovery | ✅ `/.well-known/oauth-protected-resource` (live once `FORGE3D_OAUTH_ISSUER` is set) |
 | Per-user routing to paired desktop | ✅ verified (token `sub` → that user's desktop) |
-| Privacy policy + Terms | ✅ https://forge3d.duckdns.org/privacy · /terms |
+| Privacy policy + Terms | ✅ https://forge3d.design/privacy · /terms |
 
 **Two things only YOU can do** (I can't create accounts, accept third-party terms, or submit authenticated forms):
 1. **Create an OAuth IdP tenant** (Auth0 / Stytch / WorkOS / Clerk / Keycloak) with **Dynamic Client Registration** enabled.
@@ -23,7 +23,7 @@ Anthropic reviews and lists them.
 ssh -i ~/.ssh/rewardguard-db-key ubuntu@18.222.194.21 \
   "cd ~/forge3d-cloud/server/cloud-mcp && \
    printf '\nFORGE3D_OAUTH_ISSUER=%s\nFORGE3D_OAUTH_JWKS=%s\nFORGE3D_OAUTH_AUDIENCE=%s\n' \
-     'https://YOUR_TENANT/' 'https://YOUR_TENANT/.well-known/jwks.json' 'https://forge3d.duckdns.org' >> .env && \
+     'https://YOUR_TENANT/' 'https://YOUR_TENANT/.well-known/jwks.json' 'https://forge3d.design' >> .env && \
    sudo systemctl restart forge3d-cloud"
 # verify it flipped to OAuth mode:
 ssh -i ~/.ssh/rewardguard-db-key ubuntu@18.222.194.21 "journalctl -u forge3d-cloud -n1 --no-pager"

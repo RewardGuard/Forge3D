@@ -8,7 +8,7 @@ export default function PartsLibrary() {
   const query = q.trim().toLowerCase();
 
   return (
-    <div className="panel scroll">
+    <div className="panel scroll" data-tut="parts">
       <h3>Parts Library</h3>
       <input className="search" placeholder="Search parts…" value={q} onChange={(e) => setQ(e.target.value)} />
       {CATEGORIES.map((cat) => {

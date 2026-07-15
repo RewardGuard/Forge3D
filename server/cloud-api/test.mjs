@@ -85,6 +85,28 @@ try {
   await fetch(BASE + '/billing/webhook', { method: 'POST', headers: { 'stripe-signature': `t=${t},v1=${v2}` }, body: cancel });
   const meBack = await get('/me', T);
   ok('subscription canceled → back to free', meBack.body.plan === 'free' && meBack.body.usage.limit === 5000);
+
+  console.log('FREE TRIAL (7 days, one per device)');
+  const tr = await post('/auth/signup', { email: 'trialer@test.com', password: 'trialpass123' });
+  const TT = tr.body.token;
+  const meT0 = await get('/me', TT);
+  ok('new account not entitled, trial not used', meT0.body.entitled === false && meT0.body.trial.active === false && meT0.body.storage.plan === 'none', JSON.stringify(meT0.body));
+  ok('missing deviceId → 400', (await post('/trial/start', {}, TT)).status === 400);
+  const start = await post('/trial/start', { deviceId: 'device-abcdef-0001' }, TT);
+  ok('trial starts → entitled + 2M cap', start.status === 200 && start.body.entitled === true && start.body.trial.active === true && start.body.usage.limit === 2000000, JSON.stringify(start.body));
+  const again = await post('/trial/start', { deviceId: 'device-abcdef-0001' }, TT);
+  ok('same account re-start is idempotent (200)', again.status === 200 && again.body.trial.active === true);
+  // a brand-new account on the SAME device cannot get a second trial
+  const tr2 = await post('/auth/signup', { email: 'recreate@test.com', password: 'trialpass123' });
+  const reuse = await post('/trial/start', { deviceId: 'device-abcdef-0001' }, tr2.body.token);
+  ok('delete+recreate on same device → 409 trial_used', reuse.status === 409 && reuse.body.code === 'trial_used', JSON.stringify(reuse.body));
+  const meReuse = await get('/me', tr2.body.token);
+  ok('the recreated account stays on free (no trial granted)', meReuse.body.entitled === false && meReuse.body.trial.active === false);
+
+  console.log('F3D STORAGE');
+  ok('health reports storageBilling flag', typeof (await get('/health')).body.storageBilling === 'boolean');
+  ok('storage checkout without Stripe config → 503', (await post('/billing/checkout-storage', {}, TT)).status === 503);
+  ok('storage grant defaults to 500GB in /me', meT0.body.storage.bytes === 500 * 1024 ** 3);
 } finally {
   server.kill();
   fs.rmSync(tmp, { recursive: true, force: true });
