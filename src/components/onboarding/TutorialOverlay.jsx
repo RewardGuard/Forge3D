@@ -17,11 +17,10 @@ const STEPS = [
     done: (s, b) => s.meshes.length > b.n,
   },
   {
-    key: 'place', tab: 'design', selector: '.viewport',
-    title: 'Place it',
-    body: 'Drag the object with the move gizmo to position it on the build plate. Rotate the camera by dragging empty space.',
-    arm: (s) => ({ pos: JSON.stringify(s.meshes.map((m) => m.position)) }),
-    done: (s, b) => JSON.stringify(s.meshes.map((m) => m.position)) !== b.pos,
+    key: 'inspect', tab: 'design', selector: '.sidebar.right',
+    title: 'Fine-tune it',
+    body: 'Click your shape in the 3D view to select it — its exact size, position and colour show up here in the Inspector, ready to dial in.',
+    done: (s) => Boolean(s.selectedMeshId),
   },
   {
     key: 'circuit-tab', selector: '[data-tut="tab-circuit"]',
@@ -58,24 +57,31 @@ const STEPS = [
   },
 ];
 
-// Track a target element's viewport rect, re-measuring as the layout shifts.
+// Track a target element's viewport rect. Values are rounded and only committed
+// when they actually move (>1px) — critical because some targets sit next to a
+// live 3D canvas whose sub-pixel reflows otherwise made the spotlight+card
+// grow/shrink every frame.
 function useTargetRect(selector, dep) {
   const [rect, setRect] = useState(null);
+  const prev = useRef(null);
   useEffect(() => {
-    let raf = 0;
+    let alive = true;
     const measure = () => {
+      if (!alive) return;
       const el = selector ? document.querySelector(selector) : null;
-      if (el) {
-        const r = el.getBoundingClientRect();
-        setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
-      } else {
-        setRect(null);
+      if (!el) { if (prev.current !== null) { prev.current = null; setRect(null); } return; }
+      const r = el.getBoundingClientRect();
+      const next = { top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height) };
+      const p = prev.current;
+      if (!p || Math.abs(p.top - next.top) > 1 || Math.abs(p.left - next.left) > 1 || Math.abs(p.width - next.width) > 1 || Math.abs(p.height - next.height) > 1) {
+        prev.current = next;
+        setRect(next);
       }
-      raf = requestAnimationFrame(() => setTimeout(measure, 250));
     };
     measure();
+    const id = setInterval(measure, 400);
     window.addEventListener('resize', measure);
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', measure); };
+    return () => { alive = false; clearInterval(id); window.removeEventListener('resize', measure); };
   }, [selector, dep]);
   return rect;
 }
@@ -102,28 +108,27 @@ export default function TutorialOverlay() {
     };
   }, []);
 
-  // opening a step: switch to its workspace + capture the completion baseline
-  useEffect(() => {
-    const s = useStore.getState();
-    if (step.tab && s.tab !== step.tab) setTab(step.tab);
-    baseline.current = step.arm ? step.arm(useStore.getState()) : {};
-  }, [i, step, setTab]);
-
   const rect = useTargetRect(step.selector, i);
 
-  // auto-advance when the current step's goal is met
+  // opening a step: switch to its workspace, capture the completion baseline,
+  // then auto-advance ONLY on a later store change that satisfies the goal.
+  // (No synchronous check at mount — that used to spuriously skip steps whose
+  // condition was already true. The `n === i` guard blocks stale advances.)
   useEffect(() => {
-    if (step.last) return;
-    const check = (s) => {
-      if (step.done(s, baseline.current)) {
-        const t = setTimeout(() => setI((n) => Math.min(n + 1, STEPS.length - 1)), 550);
-        return () => clearTimeout(t);
+    if (step.tab && useStore.getState().tab !== step.tab) setTab(step.tab);
+    baseline.current = step.arm ? step.arm(useStore.getState()) : {};
+    if (step.last) return undefined;
+    let advanced = false;
+    let timer = 0;
+    const unsub = useStore.subscribe(() => {
+      if (advanced) return;
+      if (step.done(useStore.getState(), baseline.current)) {
+        advanced = true;
+        timer = setTimeout(() => setI((n) => (n === i ? Math.min(n + 1, STEPS.length - 1) : n)), 500);
       }
-    };
-    let cleanup = check(useStore.getState());
-    const unsub = useStore.subscribe((s) => { if (!cleanup) cleanup = check(s); });
-    return () => { unsub(); if (cleanup) cleanup(); };
-  }, [i, step]);
+    });
+    return () => { unsub(); if (timer) clearTimeout(timer); };
+  }, [i, step, setTab]);
 
   function finish(skipped) {
     // restore the pre-tutorial scene so scratch edits vanish

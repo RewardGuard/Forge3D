@@ -728,9 +728,11 @@ select:hover { border-color: var(--hover-border); }
 
 /* ---- interactive tutorial overlay ---- */
 .tut-root { position: fixed; inset: 0; z-index: 3000; pointer-events: none; }
-.tut-dim { position: absolute; inset: 0; background: rgba(6,9,14,.62); pointer-events: auto; }
-.tut-spot { position: absolute; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(6,9,14,.62); border: 2px solid var(--accent); transition: all .2s ease; pointer-events: none; }
-.tut-card { position: absolute; width: 340px; background: var(--panel); border: 1px solid var(--hover-border); border-radius: 14px; padding: 16px 18px; box-shadow: 0 18px 50px rgba(0,0,0,.5); pointer-events: auto; transition: left .2s ease, top .2s ease; }
+.tut-dim { position: absolute; inset: 0; background: rgba(6,9,14,.72); pointer-events: auto; }
+/* NO size/position transition here: the spotlight sits over a live 3D canvas and
+   any transition turned sub-pixel reflows into a constant grow/shrink flicker. */
+.tut-spot { position: absolute; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(6,9,14,.72); border: 2px solid var(--accent); transition: none; pointer-events: none; }
+.tut-card { position: absolute; width: 340px; background: var(--panel); border: 1px solid var(--hover-border); border-radius: 14px; padding: 16px 18px; box-shadow: 0 18px 50px rgba(0,0,0,.55); pointer-events: auto; transition: left .18s ease, top .18s ease; }
 .tut-step { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--accent); font-weight: 700; }
 .tut-card h3 { margin: 4px 0 6px; font-size: 16px; }
 .tut-card p { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
