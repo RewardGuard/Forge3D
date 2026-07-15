@@ -1,0 +1,25 @@
+# Forge3D — Caddy config for the forge3d.design cutover.
+# Install to /etc/caddy/Caddyfile on the box (18.222.194.21), then `sudo systemctl reload caddy`.
+# Caddy auto-issues a Let's Encrypt cert once forge3d.design's A record points here.
+{
+    email giovan.ruiz.000@gmail.com
+}
+
+forge3d.design {
+    # billing / accounts API  →  forge3d-proxy (:8787)
+    handle /f3d-api/* {
+        uri strip_prefix /f3d-api
+        reverse_proxy 127.0.0.1:8787
+    }
+    # MCP connector + landing page + downloads  →  forge3d-cloud (:8788)
+    handle {
+        reverse_proxy 127.0.0.1:8788
+    }
+}
+
+# Transition helper: send old duckdns links to the new domain. Browser links
+# follow this; already-installed apps that POST to the API do NOT follow 308s,
+# so those users must install the new build (expected — this is a full switch).
+forge3d.duckdns.org {
+    redir https://forge3d.design{uri} permanent
+}

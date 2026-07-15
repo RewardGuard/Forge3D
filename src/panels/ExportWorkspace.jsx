@@ -38,7 +38,7 @@ export default function ExportWorkspace() {
   const itemCount = rows.reduce((a, r) => a + r.qty, 0);
 
   return (
-    <div className="layout two-col export-layout">
+    <div className="layout two-col export-layout" data-tut="export-panel">
       <section className="export-preview">
         <div className="toolbar">
           <span className="muted small">Sticker-circuit preview (cut along black) · {wires.length} traces</span>

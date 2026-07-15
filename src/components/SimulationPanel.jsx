@@ -11,7 +11,7 @@ export default function SimulationPanel() {
   return (
     <div className="panel scroll">
       <h3>Simulation</h3>
-      <button className={'btn full ' + (simOn ? 'danger' : 'primary')} onClick={toggleSim}>
+      <button data-tut="run-sim" className={'btn full ' + (simOn ? 'danger' : 'primary')} onClick={toggleSim}>
         {simOn ? '■ Stop simulation' : '▶ Run simulation'}
       </button>
 

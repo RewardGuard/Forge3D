@@ -68,8 +68,9 @@ const pickProvider = (id) => (id ? available().find((p) => p.id === id) : availa
 
 // ---- atomic JSON store ----
 const DB_FILE = process.env.DB_PATH || path.join(__dirname, 'data.json');
-let db = { accounts: {}, usage: {} }; // accounts[email] = {...}; usage[`${email}|${YYYY-MM}`] = tokens
+let db = { accounts: {}, usage: {}, trials: {} }; // accounts[email]={...}; usage[`${email}|${YYYY-MM}`]=tokens; trials[deviceId]={email,startedAt}
 try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8')); } catch { /* fresh */ }
+if (!db.trials) db.trials = {}; // migrate older stores
 function saveDB() {
   const tmp = DB_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
@@ -82,7 +83,7 @@ function addUsage(email, tokens) {
   db.usage[k] = (db.usage[k] || 0) + Math.max(0, Math.round(tokens));
   saveDB();
 }
-const limitOf = (acct) => (acct.plan === 'pro' ? PRO_TOKENS : FREE_TOKENS);
+const limitOf = (acct) => (entitledOf(acct) ? PRO_TOKENS : FREE_TOKENS); // pro or trial → generous cap
 
 // ---- passwords (scrypt) + JWT (HS256, no deps) ----
 const b64u = (buf) => Buffer.from(buf).toString('base64url');
@@ -120,8 +121,16 @@ const authOf = (req) => verifyToken((req.headers.authorization || '').replace(/^
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_WHSEC = process.env.STRIPE_WEBHOOK_SECRET || '';
 const STRIPE_PRICE = process.env.STRIPE_PRICE_ID || '';
+const STRIPE_STORAGE_PRICE = process.env.STRIPE_STORAGE_PRICE_ID || ''; // F3D Storage ($3/mo · 500GB)
 const PUBLIC_URL = (process.env.PUBLIC_URL || `http://18.222.194.21:${PORT}`).replace(/\/$/, '');
 const billingConfigured = () => Boolean(STRIPE_KEY && STRIPE_PRICE);
+const storageBillingConfigured = () => Boolean(STRIPE_KEY && STRIPE_STORAGE_PRICE);
+
+// ---- trial + storage constants ----
+const TRIAL_DAYS = Number(process.env.TRIAL_DAYS) || 7;
+const STORAGE_BYTES = Number(process.env.STORAGE_BYTES) || 500 * 1024 ** 3; // 500GB default grant
+const trialActive = (acct) => Boolean(acct?.trialStartedAt && Date.now() - acct.trialStartedAt < TRIAL_DAYS * 86400_000);
+const entitledOf = (acct) => acct?.plan === 'pro' || trialActive(acct); // pro OR live trial unlocks everything
 
 async function stripe(pathname, params) {
   const body = new URLSearchParams();
@@ -241,10 +250,14 @@ function readBody(req, limit = 256 * 1024) {
 }
 const meOf = (email) => {
   const a = db.accounts[email];
+  const active = trialActive(a);
   return {
     email, plan: a.plan || 'free',
+    entitled: entitledOf(a), // pro OR live trial — the app hides ads / unlocks perks on this
+    trial: { active, endsAt: a.trialStartedAt ? a.trialStartedAt + TRIAL_DAYS * 86400_000 : null, used: Boolean(a.trialStartedAt) },
+    storage: { plan: a.storagePlan || 'none', bytes: a.storageBytes || STORAGE_BYTES },
     usage: { used: usageOf(email), limit: limitOf(a), period: period() },
-    billing: { configured: billingConfigured(), subscriptionStatus: a.subStatus || null },
+    billing: { configured: billingConfigured(), storageConfigured: storageBillingConfigured(), subscriptionStatus: a.subStatus || null },
   };
 };
 
@@ -255,7 +268,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === 'GET' && url.pathname === '/health') {
-      return send(res, 200, { ok: true, providers: available().map((p) => p.id), billing: billingConfigured(), accounts: true, provider: available()[0]?.id || null, configured: available().length > 0 });
+      return send(res, 200, { ok: true, providers: available().map((p) => p.id), billing: billingConfigured(), storageBilling: storageBillingConfigured(), accounts: true, provider: available()[0]?.id || null, configured: available().length > 0 });
     }
 
     if (req.method === 'GET' && url.pathname === '/billing/done') {
@@ -272,11 +285,25 @@ const server = http.createServer(async (req, res) => {
       if (event.type === 'checkout.session.completed') {
         const email = obj.client_reference_id || obj.customer_details?.email;
         const a = db.accounts[email];
-        if (a) { a.plan = 'pro'; a.stripeCustomer = obj.customer; a.stripeSub = obj.subscription; a.subStatus = 'active'; saveDB(); }
+        if (a) {
+          // which product? prefer the metadata tag we set on the session, fall
+          // back to the amount ($3.00 = storage, otherwise Pro).
+          const kind = obj.metadata?.plan || (obj.amount_total === 300 ? 'storage' : 'pro');
+          if (kind === 'storage') { a.storagePlan = 'storage'; a.storageBytes = STORAGE_BYTES; a.stripeStorageSub = obj.subscription; }
+          else { a.plan = 'pro'; a.stripeSub = obj.subscription; a.subStatus = 'active'; }
+          a.stripeCustomer = obj.customer;
+          saveDB();
+        }
       } else if (event.type === 'customer.subscription.deleted' || event.type === 'customer.subscription.updated') {
         const active = obj.status === 'active' || obj.status === 'trialing';
         const email = Object.keys(db.accounts).find((e) => db.accounts[e].stripeCustomer === obj.customer);
-        if (email) { db.accounts[email].plan = active ? 'pro' : 'free'; db.accounts[email].subStatus = obj.status; saveDB(); }
+        if (email) {
+          const a = db.accounts[email];
+          const priceId = obj.items?.data?.[0]?.price?.id;
+          if (priceId && priceId === STRIPE_STORAGE_PRICE) { a.storagePlan = active ? 'storage' : 'none'; }
+          else { a.plan = active ? 'pro' : 'free'; a.subStatus = obj.status; } // Pro price or unknown → treat as Pro sub
+          saveDB();
+        }
       }
       return send(res, 200, { received: true });
     }
@@ -318,6 +345,7 @@ const server = http.createServer(async (req, res) => {
         'line_items[0][quantity]': 1,
         client_reference_id: email,
         customer_email: email,
+        'metadata[plan]': 'pro',
         success_url: `${PUBLIC_URL}/billing/done`,
         cancel_url: `${PUBLIC_URL}/billing/done`,
       });
@@ -328,6 +356,35 @@ const server = http.createServer(async (req, res) => {
       if (!billingConfigured() || !a.stripeCustomer) return send(res, 503, { error: 'No subscription to manage yet.' });
       const session = await stripe('/v1/billing_portal/sessions', { customer: a.stripeCustomer, return_url: `${PUBLIC_URL}/billing/done` });
       return send(res, 200, { url: session.url });
+    }
+    if (req.method === 'POST' && url.pathname === '/billing/checkout-storage') {
+      if (!storageBillingConfigured()) return send(res, 503, { error: 'F3D Storage billing is not configured on the server yet.' });
+      const session = await stripe('/v1/checkout/sessions', {
+        mode: 'subscription',
+        'line_items[0][price]': STRIPE_STORAGE_PRICE,
+        'line_items[0][quantity]': 1,
+        client_reference_id: email,
+        customer_email: email,
+        'metadata[plan]': 'storage',
+        success_url: `${PUBLIC_URL}/billing/done`,
+        cancel_url: `${PUBLIC_URL}/billing/done`,
+      });
+      return send(res, 200, { url: session.url });
+    }
+
+    // ---- 7-day free trial: one per device, ever (survives account churn) ----
+    if (req.method === 'POST' && url.pathname === '/trial/start') {
+      const a = db.accounts[email];
+      const deviceId = String(body.deviceId || '').trim();
+      if (!deviceId || deviceId.length < 8) return send(res, 400, { error: 'Missing device id.' });
+      if (a.trialStartedAt) return send(res, 200, meOf(email)); // already on trial — idempotent
+      if (db.trials[deviceId]) {
+        return send(res, 409, { error: 'A free trial was already used on this device.', code: 'trial_used' });
+      }
+      db.trials[deviceId] = { email, startedAt: Date.now() };
+      a.trialStartedAt = Date.now();
+      saveDB();
+      return send(res, 200, meOf(email));
     }
 
     // ---- metered chat ----

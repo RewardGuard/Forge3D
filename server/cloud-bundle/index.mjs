@@ -5,7 +5,7 @@
 // A stdio MCP server Claude Desktop launches. For each tool call it routes to:
 //   1) your LIVE Forge3D app, if it's open with the control bridge on
 //      (http://127.0.0.1:8765) — so Claude's work APPEARS in the 3D viewport, or
-//   2) the hosted Forge3D Cloud (forge3d.duckdns.org), headless, when the app
+//   2) the hosted Forge3D Cloud (forge3d.design), headless, when the app
 //      isn't running — so it still works with no app.
 //
 // Cloud URL + token are baked in via the manifest, so install is zero-config.
@@ -17,7 +17,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { TOOL_DEFS } from '../orchestra-mcp/tools.mjs';
 
-const CLOUD_URL = process.env.FORGE3D_CLOUD_URL || 'https://forge3d.duckdns.org/mcp';
+const CLOUD_URL = process.env.FORGE3D_CLOUD_URL || 'https://forge3d.design/mcp';
 const TOKEN = process.env.FORGE3D_API_TOKEN || '';
 const LOCAL_BRIDGE = (process.env.FORGE3D_BRIDGE || 'http://127.0.0.1:8765').replace(/\/$/, '');
 const BRIDGE_TOKEN = process.env.FORGE3D_BRIDGE_TOKEN || '';

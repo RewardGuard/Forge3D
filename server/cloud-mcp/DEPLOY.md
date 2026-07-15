@@ -2,7 +2,7 @@
 
 ## Status — LIVE over HTTPS (2026-06-22)
 
-Public endpoint: **`https://forge3d.duckdns.org/mcp`** (DuckDNS → `18.222.194.21`).
+Public endpoint: **`https://forge3d.design/mcp`** (DuckDNS → `18.222.194.21`).
 
 - systemd **`forge3d-cloud`** (Node v20) on port **8788**, fronted by **Caddy** (TLS on 443, Let's Encrypt cert auto-issued/renewed).
 - runtime deps: **`zustand` + `three` only** (*not* electron/vite/react, and *not* `three-bvh-csg` — only in the CSG bake path the cloud never loads).

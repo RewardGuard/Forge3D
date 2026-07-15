@@ -33,8 +33,23 @@ contextBridge.exposeInMainWorld('forge', {
     logout: () => ipcRenderer.invoke('account:logout'),
     me: () => ipcRenderer.invoke('account:me'),
     checkout: () => ipcRenderer.invoke('account:checkout'),
+    checkoutStorage: () => ipcRenderer.invoke('account:checkoutStorage'),
     portal: () => ipcRenderer.invoke('account:portal'),
+    startTrial: () => ipcRenderer.invoke('account:startTrial'),
     setCloudAi: (ai) => ipcRenderer.invoke('config:setCloudAi', ai),
+  },
+  onboarding: {
+    get: () => ipcRenderer.invoke('onboarding:get'),
+    set: (patch) => ipcRenderer.invoke('onboarding:set', patch),
+  },
+  device: {
+    fingerprint: () => ipcRenderer.invoke('device:fingerprint'),
+  },
+  storage: {
+    status: () => ipcRenderer.invoke('storage:status'),
+    add: () => ipcRenderer.invoke('storage:add'),
+    list: () => ipcRenderer.invoke('storage:list'),
+    reveal: (filePath) => ipcRenderer.invoke('storage:reveal', { filePath }),
   },
   orchestra: {
     think: (payload) => ipcRenderer.invoke('orchestra:think', payload),

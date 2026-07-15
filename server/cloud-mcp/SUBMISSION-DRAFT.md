@@ -8,7 +8,7 @@ Copy-paste answers for Claude.ai → Admin settings → Directory → Submission
 > available — you'd need a Team workspace first.
 
 ## 2 · Connection
-- Server URL: `https://forge3d.duckdns.org/mcp`
+- Server URL: `https://forge3d.design/mcp`
 - Transport: **Streamable HTTP**
 
 ## 3 · Tools
@@ -30,7 +30,7 @@ All 32 tools carry `title` + `readOnlyHint`/`destructiveHint` (12 read-only;
   > testing in the physics-based Life Sim (gravity, heat, motors).
 - **Categories**: Developer Tools / Design / Engineering [pick from the list shown]
 - **Documentation URL**: `https://github.com/RewardGuard/Forge3D` *(must be public; make the repo public or publish a docs page)*
-- **Privacy policy URL**: `https://forge3d.duckdns.org/privacy`
+- **Privacy policy URL**: `https://forge3d.design/privacy`
 - **Support contact**: `giovan.ruiz.000@gmail.com`
 - **Icon**: `assets/forge3d-logo.png` (the F3 mark)
 - **URL slug**: `forge3d`
@@ -56,7 +56,7 @@ All 32 tools carry `title` + `readOnlyHint`/`destructiveHint` (12 read-only;
 - Health data: **No**. Sponsored content: **No**.
 
 ## 9 · Test & launch (write this for the reviewer)
-- Connect URL: `https://forge3d.duckdns.org/mcp` → you'll be sent through OAuth sign-in.
+- Connect URL: `https://forge3d.design/mcp` → you'll be sent through OAuth sign-in.
 - Test account: `[create one in your IdP and paste credentials, OR enable Google/email
   sign-in so the reviewer can self-serve]`.
 - Steps to exercise it: 1) connect & authorize; 2) ask *"design a sumo robot with
