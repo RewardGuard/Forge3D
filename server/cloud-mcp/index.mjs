@@ -187,8 +187,17 @@ const server = http.createServer(async (req, res) => {
           return res.end(buf);
         } catch { return sendJson(res, 404, { error: 'not found' }); }
       }
-      // installer downloads → 302 to the newest GitHub release asset (fallback: releases page)
+      // installer downloads
       if (url.pathname === '/download/mac' || url.pathname === '/download/windows') {
+        // macOS: serve the locally-hosted, Apple-signed + notarized .dmg directly.
+        if (url.pathname.endsWith('mac')) {
+          try {
+            const buf = fs.readFileSync(path.join(dir, 'public', 'download', 'Forge3D-arm64.dmg'));
+            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="Forge3D-arm64.dmg"', ...CORS });
+            return res.end(buf);
+          } catch { /* fall through to the GitHub redirect below */ }
+        }
+        // Windows (or a mac fallback): 302 to the newest GitHub release asset.
         const re = url.pathname.endsWith('mac') ? /arm64\.dmg$/ : /\.exe$/i;
         const target = await latestAssetUrl(re).catch(() => 'https://github.com/RewardGuard/Forge3D/releases/latest');
         res.writeHead(302, { location: target, ...CORS });
