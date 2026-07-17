@@ -142,6 +142,21 @@ function readBody(req) {
   });
 }
 
+// Resolve the newest installer from the GitHub release (10-min cache) so the
+// forge3d.design/download/{mac,windows} links always point at the latest .dmg/.exe.
+const GH_RELEASE = 'https://api.github.com/repos/RewardGuard/Forge3D/releases/latest';
+let _rel = { at: 0, assets: [] };
+async function latestAssetUrl(re) {
+  if (Date.now() - _rel.at > 600000) {
+    const r = await fetch(GH_RELEASE, { headers: { 'user-agent': 'forge3d-cloud', accept: 'application/vnd.github+json' } });
+    const j = await r.json();
+    _rel = { at: Date.now(), assets: j.assets || [] };
+  }
+  const a = _rel.assets.find((x) => re.test(x.name));
+  if (!a) throw new Error('no matching asset');
+  return a.browser_download_url;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, PUBLIC_URL);
   try {
@@ -171,6 +186,13 @@ const server = http.createServer(async (req, res) => {
           res.writeHead(200, headers);
           return res.end(buf);
         } catch { return sendJson(res, 404, { error: 'not found' }); }
+      }
+      // installer downloads → 302 to the newest GitHub release asset (fallback: releases page)
+      if (url.pathname === '/download/mac' || url.pathname === '/download/windows') {
+        const re = url.pathname.endsWith('mac') ? /arm64\.dmg$/ : /\.exe$/i;
+        const target = await latestAssetUrl(re).catch(() => 'https://github.com/RewardGuard/Forge3D/releases/latest');
+        res.writeHead(302, { location: target, ...CORS });
+        return res.end();
       }
     }
 

@@ -3,75 +3,118 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Forge3D for Claude — Design 3D-printable gadgets from a sentence</title>
-<meta name="description" content="Add Forge3D to Claude in one click. Describe a gadget; get a validated 3D-printable design — geometry, circuit, firmware and BOM.">
+<title>Forge3D — Design 3D-printable gadgets from a sentence</title>
+<meta name="description" content="Download Forge3D for Mac or Windows, or add it to Claude in one click. Describe a gadget; get a validated 3D-printable design — geometry, circuit, firmware and BOM.">
 <style>
-  :root{ --bg:#0b0e13; --card:#11151c; --line:#222a36; --txt:#eef2f8; --muted:#9aa7ba; --steel:#c7d0dd; --lava:#ff5a1f; --lava2:#ff7a3c; }
+  :root{ --bg:#0b0e13; --card:#11151c; --line:#222a36; --txt:#eef2f8; --muted:#9aa7ba; --steel:#c7d0dd; --lava:#ff5a1f; --lava2:#ff7a3c; --blue:#3b82f6; }
   *{box-sizing:border-box} html,body{margin:0}
   body{background:radial-gradient(1200px 600px at 50% -10%, #161c26 0%, var(--bg) 60%);color:var(--txt);
        font:16px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;min-height:100vh}
-  .wrap{max-width:760px;margin:0 auto;padding:56px 22px 64px;text-align:center}
-  img.logo{width:132px;height:132px;border-radius:26px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  .wrap{max-width:780px;margin:0 auto;padding:52px 22px 64px;text-align:center}
+  img.logo{width:120px;height:120px;border-radius:24px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
   h1{font-size:2.5rem;margin:.5rem 0 .2rem;letter-spacing:-.02em}
-  .tag{color:var(--muted);font-size:1.15rem;margin:0 0 2rem}
-  .cta{display:inline-flex;align-items:center;gap:.6rem;background:linear-gradient(180deg,var(--lava2),var(--lava));
-       color:#fff;font-weight:700;font-size:1.12rem;text-decoration:none;padding:16px 30px;border-radius:14px;
-       box-shadow:0 10px 30px rgba(255,90,31,.35);transition:transform .08s ease}
-  .cta:active{transform:translateY(1px)}
-  .sub{color:var(--muted);font-size:.9rem;margin-top:.8rem}
-  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:42px 0 8px;text-align:left}
-  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 16px 18px}
-  .num{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:8px;background:#1b2230;color:var(--lava);font-weight:800;margin-bottom:8px}
-  .step b{display:block;margin-bottom:2px}
-  .step p{margin:0;color:var(--muted);font-size:.92rem}
-  .try{margin-top:34px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;text-align:left}
-  .try .lbl{color:var(--muted);font-size:.82rem;text-transform:uppercase;letter-spacing:.08em}
-  .try code{display:block;margin-top:8px;color:var(--steel);font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
-  .feat{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:26px 0 0}
+  .tag{color:var(--muted);font-size:1.15rem;margin:0 0 1.8rem}
+  h2{font-size:1.35rem;margin:0 0 4px}
+  .section{margin:40px 0 0}
+  .section-sub{color:var(--muted);font-size:.95rem;margin:0 0 20px}
+  /* download buttons */
+  .dl{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;gap:.6rem;text-decoration:none;font-weight:700;font-size:1.05rem;
+       padding:15px 26px;border-radius:14px;transition:transform .08s ease;min-width:230px;justify-content:center}
+  .btn:active{transform:translateY(1px)}
+  .btn.mac{background:linear-gradient(180deg,var(--lava2),var(--lava));color:#fff;box-shadow:0 10px 30px rgba(255,90,31,.35)}
+  .btn.win{background:#1b2230;color:var(--txt);border:1px solid var(--line)}
+  .btn small{display:block;font-weight:500;font-size:.76rem;opacity:.8;margin-top:1px}
+  .alt{color:var(--muted);font-size:.9rem;margin-top:16px}
+  .alt code{background:#141a24;border:1px solid var(--line);border-radius:7px;padding:5px 10px;color:var(--steel);font-size:.84rem}
+  /* connect steps */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0 0;text-align:left}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px 15px 16px}
+  .num{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:8px;background:#1b2230;color:var(--lava);font-weight:800;margin-bottom:8px}
+  .step b{display:block;margin-bottom:3px;font-size:.98rem}
+  .step p{margin:0;color:var(--muted);font-size:.88rem}
+  .step code{color:var(--steel);font-size:.82rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;text-align:left;margin-top:16px}
+  .card h3{margin:0 0 6px;font-size:1.05rem}
+  .card p{margin:0;color:var(--muted);font-size:.92rem}
+  .card ol{margin:8px 0 0;padding-left:20px;color:var(--steel);font-size:.92rem}
+  .card ol li{margin:4px 0}
+  .try{margin-top:16px}
+  .try code{display:block;margin-top:8px;color:var(--steel);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+       background:#0c1118;border:1px solid var(--line);border-radius:8px;padding:9px 12px}
+  .feat{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:22px 0 0}
   .chip{background:#141a24;border:1px solid var(--line);color:var(--steel);border-radius:999px;padding:6px 13px;font-size:.86rem}
-  footer{margin-top:40px;color:var(--muted);font-size:.85rem}
+  footer{margin-top:44px;color:var(--muted);font-size:.85rem}
   footer a{color:var(--muted)}
-  @media(max-width:560px){.steps{grid-template-columns:1fr}h1{font-size:2rem}}
+  @media(max-width:640px){.steps{grid-template-columns:1fr 1fr}h1{font-size:2rem}.btn{min-width:0;flex:1}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <img class="logo" src="/logo.png" alt="Forge3D">
-  <h1>Forge3D for Claude</h1>
+  <h1>Forge3D</h1>
   <p class="tag">Describe a gadget — get a validated, 3D-printable design.</p>
-
-  <a class="cta" href="/download/forge3d-cloud.mcpb" download>⬇ Add to Claude Desktop</a>
-  <div class="sub">A one-click connector for Claude Desktop — no account, no API key.</div>
 
   <div class="feat">
     <span class="chip">3D geometry</span><span class="chip">Auto-wired circuit</span>
     <span class="chip">Firmware</span><span class="chip">Bill of materials</span><span class="chip">Printability checks</span>
   </div>
 
-  <div class="steps">
-    <div class="step"><span class="num">1</span><b>Download</b><p>Click the button to get the Forge3D bundle (<code style="display:inline">.mcpb</code>).</p></div>
-    <div class="step"><span class="num">2</span><b>Double-click it</b><p>Claude Desktop opens and shows an Install dialog. Hit <b>Install</b>.</p></div>
-    <div class="step"><span class="num">3</span><b>Chat</b><p>Forge3D appears in the <b>+ → Connectors</b> menu. Ask it to build something.</p></div>
+  <!-- ============ DOWNLOAD ============ -->
+  <div class="section">
+    <h2>Download the app</h2>
+    <p class="section-sub">The full desktop studio — design, simulate and export.</p>
+    <div class="dl">
+      <a class="btn mac" href="/download/mac"><span>⬇ Download for macOS</span><small>Apple Silicon · .dmg</small></a>
+      <a class="btn win" href="/download/windows"><span>⬇ Download for Windows</span><small>Windows 10/11 · .exe</small></a>
+    </div>
+    <p class="alt">
+      On a Mac, the one-liner installs &amp; opens it with no Gatekeeper warning:<br>
+      <code>curl -fsSL https://forge3d.design/install.sh | bash</code>
+    </p>
   </div>
 
-  <div class="try">
-    <span class="lbl">Try asking Claude</span>
-    <code>"design a sumo robot with ultrasonic, 4 motors and an arduino"</code>
-    <code>"a sensor enclosure with 3 status LEDs and a button"</code>
-  </div>
+  <!-- ============ CONNECT TO CLAUDE ============ -->
+  <div class="section">
+    <h2>Connect Forge3D to Claude</h2>
+    <p class="section-sub">Let Claude design for you — two ways, pick one.</p>
 
-  <p style="margin-top:30px;color:var(--muted);font-size:.95rem">
-    Prefer the full desktop app (macOS, Apple Silicon)? Easiest — paste this in Terminal:<br>
-    <code style="background:#141a24;border:1px solid var(--line);border-radius:7px;padding:6px 11px;display:inline-block;margin-top:7px;color:var(--steel);font-size:.86rem">curl -fsSL https://forge3d.design/install.sh | bash</code><br>
-    <span style="font-size:.84rem">Installs it to Applications and opens it — no "damaged" warning. Or <a href="https://github.com/RewardGuard/Forge3D/releases/latest" style="color:var(--lava2)">download the .dmg</a> manually (then run <code style="font-size:.8rem">xattr -dr com.apple.quarantine /Applications/Forge3D.app</code>).</span>
-  </p>
+    <div class="card">
+      <h3>① Easiest — one-click connector (Claude Desktop)</h3>
+      <p>Claude designs in the cloud, no app or account needed.</p>
+      <div class="steps">
+        <div class="step"><span class="num">1</span><b>Get the bundle</b><p><a href="/download/forge3d-cloud.mcpb" download style="color:var(--lava2)">Download the connector</a> (<code>.mcpb</code>).</p></div>
+        <div class="step"><span class="num">2</span><b>Double-click it</b><p>Claude Desktop opens an <b>Install</b> dialog — click Install.</p></div>
+        <div class="step"><span class="num">3</span><b>Find it</b><p>It shows up under <b>+ → Connectors</b> in the chat box.</p></div>
+        <div class="step"><span class="num">4</span><b>Ask away</b><p>“design a sumo robot” — Claude builds it.</p></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>② Drive your installed app live</h3>
+      <p>So Claude builds right inside your Forge3D 3D viewport.</p>
+      <ol>
+        <li>Open the <b>Forge3D</b> app (download above) and sign in / continue offline.</li>
+        <li>On the home screen, click <b>“Connect to Claude”</b> (top-right) → <b>Turn on the bridge</b>.</li>
+        <li>Click <b>Copy config</b> — it copies a small MCP snippet.</li>
+        <li>Paste it into your Claude <b>MCP config</b> (Claude Desktop: Settings → Developer → Edit config; Claude Code: your <code>.mcp.json</code>), then restart Claude.</li>
+        <li>Ask Claude to build — it appears live in your open app.</li>
+      </ol>
+    </div>
+
+    <div class="try card">
+      <h3>Try asking Claude</h3>
+      <code>"design a sumo robot with ultrasonic, 4 motors and an arduino"</code>
+      <code>"a sensor enclosure with 3 status LEDs and a button"</code>
+    </div>
+  </div>
 
   <footer>
     Don't have Claude Desktop? <a href="https://claude.ai/download">Get it here</a>.<br>
     <a href="https://github.com/RewardGuard/Forge3D">GitHub</a> ·
-    <a href="https://github.com/RewardGuard/Forge3D/releases">Releases</a> ·
-    <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a><br>
-    How it works: the connector designs in the cloud (no app needed) — install the Forge3D desktop app to build live in the 3D viewport.
+    <a href="https://github.com/RewardGuard/Forge3D/releases">All releases</a> ·
+    <a href="https://github.com/RewardGuard/Forge3D/blob/main/CONNECT.md">Advanced (Claude Code)</a> ·
+    <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a>
   </footer>
 </div>
 </body>
