@@ -21,15 +21,16 @@ scp -i ~/.ssh/rewardguard-db-key \
   ubuntu@18.222.194.21:~/
 ssh -i ~/.ssh/rewardguard-db-key ubuntu@18.222.194.21 'bash ~/deploy-forge3d-design.sh'
 ```
-This backs up + installs the new Caddyfile, flips `PUBLIC_URL`/`FORGE3D_PUBLIC_URL`
-to `https://forge3d.design`, restarts both services, and curls `/f3d-api/health`,
-`/mcp`, and `/` on the new domain.
+This backs up + installs the new Caddyfile, sets `PUBLIC_URL=https://forge3d.design/f3d-api`
+(billing API lives under /f3d-api) and `FORGE3D_PUBLIC_URL=https://forge3d.design`
+(root MCP/landing), restarts both services, and curls `/f3d-api/health`, `/mcp`,
+and `/` on the new domain.
 
 ## 3. Stripe webhook re-point (manual — live Stripe write)
 ```bash
 ssh -i ~/.ssh/rewardguard-db-key ubuntu@18.222.194.21
 cd ~/forge3d-proxy
-node bootstrap-stripe.mjs https://forge3d.design   # creates the webhook at the new URL, prints STRIPE_WEBHOOK_SECRET
+node bootstrap-stripe.mjs https://forge3d.design/f3d-api   # /f3d-api REQUIRED → webhook lands on the billing service; prints STRIPE_WEBHOOK_SECRET
 # put that secret into ~/forge3d-proxy/.env (replace the old STRIPE_WEBHOOK_SECRET), then:
 sudo systemctl restart forge3d-proxy
 ```

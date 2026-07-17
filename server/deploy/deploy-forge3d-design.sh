@@ -39,7 +39,10 @@ set_env() { # file KEY value
   fi
   echo "   $f: $k set"
 }
-set_env "$PROXY_ENV" PUBLIC_URL "https://$NEW_DOMAIN"
+# NOTE: the accounts/billing API lives under /f3d-api (Caddy strips it → :8787),
+# so PUBLIC_URL MUST include /f3d-api — checkout success/cancel + the Stripe
+# webhook are built from it. The cloud MCP/landing service is at the root.
+set_env "$PROXY_ENV" PUBLIC_URL "https://$NEW_DOMAIN/f3d-api"
 set_env "$CLOUD_ENV" FORGE3D_PUBLIC_URL "https://$NEW_DOMAIN"
 
 echo "== 3. restart services =="
@@ -56,7 +59,7 @@ cat <<EOF
 
 == 5. Stripe webhook — DO THIS BY HAND (writes to live Stripe) ==
   cd ~/forge3d-proxy
-  node bootstrap-stripe.mjs https://$NEW_DOMAIN
+  node bootstrap-stripe.mjs https://$NEW_DOMAIN/f3d-api   # MUST include /f3d-api → webhook lands at the billing service
   # copy the printed STRIPE_WEBHOOK_SECRET into ~/forge3d-proxy/.env (replace the old one), then:
   sudo systemctl restart forge3d-proxy
   # optional: delete the old forge3d.duckdns.org webhook in the Stripe dashboard.
