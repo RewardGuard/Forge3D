@@ -225,15 +225,16 @@ export default function App() {
         window.forge.onboarding.get().catch(() => ({})),
       ]);
       if (cancelled) return;
-      setMe(me?.hasAccount ? me : null);
+      const signedIn = Boolean(me?.hasAccount);
+      setMe(signedIn ? me : null);
       setOnboarding({
         onboarded: Boolean(flags.onboarded),
         tutorialSeen: Boolean(flags.tutorialSeen),
         authSkipped: Boolean(flags.authSkipped),
       });
-      // Returning users (or anyone who has completed onboarding) land on Home.
-      // Brand-new users start at the auth gate.
-      setShellView(flags.onboarded ? 'home' : 'gate');
+      // Sign-in is REQUIRED (no offline). Not signed in → the gate, always.
+      // Signed in + onboarded → Home; signed in but new → finish onboarding.
+      setShellView(!signedIn ? 'gate' : (flags.onboarded ? 'home' : (flags.tutorialSeen ? 'welcome' : 'tutorial')));
     })();
     return () => { cancelled = true; };
   }, [setMe, setOnboarding, setShellView]);

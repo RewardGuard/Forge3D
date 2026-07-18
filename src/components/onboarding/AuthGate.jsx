@@ -2,13 +2,12 @@ import React, { useState } from 'react';
 import { useStore } from '../../lib/store.js';
 import markUrl from '../../assets/forge3d-mark.png';
 
-// First screen on a fresh install: create an account or sign in — but skippable,
-// because Forge3D is a local desktop tool and must keep working offline.
+// First screen on a fresh install: create an account or sign in — REQUIRED (no
+// offline skip). Once inside, the user picks their own API keys or Forge3D Cloud.
 // Reuses window.forge.account.{signup,login} (same calls as SettingsButton).
 export default function AuthGate() {
   const setMe = useStore((s) => s.setMe);
   const setShellView = useStore((s) => s.setShellView);
-  const setOnboarding = useStore((s) => s.setOnboarding);
 
   const [mode, setMode] = useState('signup'); // signup | login
   const [email, setEmail] = useState('');
@@ -40,13 +39,6 @@ export default function AuthGate() {
     }
   }
 
-  function continueOffline() {
-    setOnboarding({ authSkipped: true });
-    window.forge.onboarding?.set({ authSkipped: true });
-    setMe(null);
-    advance();
-  }
-
   return (
     <div className="onb-screen gate">
       <div className="onb-card">
@@ -75,11 +67,10 @@ export default function AuthGate() {
           {busy ? 'Please wait…' : (mode === 'signup' ? 'Create account →' : 'Sign in →')}
         </button>
         <p className="onb-note">
-          A free account gives you <b>5,000 AI tokens/month</b>. You can also start a
-          <b> 7-day free trial of everything</b> from the next screens.
+          A free account gives you <b>5,000 AI tokens/month</b>, or start a
+          <b> 7-day free trial of everything</b> next. Inside, you choose whether to use
+          <b> your own API keys</b> or <b>Forge3D Cloud</b>.
         </p>
-
-        <button className="onb-skip" onClick={continueOffline}>Continue offline — I'll sign in later</button>
       </div>
     </div>
   );

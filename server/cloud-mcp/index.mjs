@@ -171,6 +171,7 @@ const server = http.createServer(async (req, res) => {
       const dir = path.dirname(fileURLToPath(import.meta.url));
       const STATIC = {
         '/': ['index.html', 'text/html; charset=utf-8'],
+        '/about': ['about.html', 'text/html; charset=utf-8'],
         '/privacy': ['privacy.html', 'text/html; charset=utf-8'],
         '/terms': ['terms.html', 'text/html; charset=utf-8'],
         '/logo.png': ['logo.png', 'image/png'],

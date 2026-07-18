@@ -1,71 +1,71 @@
 import React, { useState } from 'react';
 import { useStore } from '../../lib/store.js';
 
-// Corner button that opens the localhost MCP bridge so the Claude desktop/chat
-// app can drive Forge3D. Mirrors the bridge control in SettingsButton, surfaced
-// on the Home dashboard as a one-click "Connect to Claude".
+// Corner "Connect to Claude" button. Leads with the EASIEST path — the one-click
+// online connector from forge3d.design (Claude designs via the hosted server, no
+// setup) — and keeps the localhost bridge as an advanced "drive this live app"
+// option for people who want the build to appear in their open viewport.
 export default function ConnectClaudeButton() {
   const bridgeEnabled = useStore((s) => s.bridgeEnabled);
   const bridgeRunning = useStore((s) => s.bridgeRunning);
   const bridgePort = useStore((s) => s.bridgePort);
-  const bridgeToken = useStore((s) => s.bridgeToken);
-  const bridgeServerPath = useStore((s) => s.bridgeServerPath);
   const setBridgeEnabled = useStore((s) => s.setBridgeEnabled);
 
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  async function toggle() {
+  async function toggleBridge() {
     const next = !bridgeEnabled;
     const res = await window.forge.config.setBridgeEnabled(next);
     setBridgeEnabled(Boolean(res?.bridgeEnabled ?? next), Boolean(res?.running));
-    if (next) setOpen(true);
   }
 
-  const snippet = `{
-  "mcpServers": {
-    "forge3d": {
-      "command": "node",
-      "args": ["${bridgeServerPath || '<path-to-forge3d>/server/orchestra-mcp/index.mjs'}"]${bridgeToken ? `,
-      "env": { "FORGE3D_BRIDGE_TOKEN": "${bridgeToken}" }` : ''}
-    }
-  }
-}`;
-
-  function copy() {
-    navigator.clipboard?.writeText(snippet);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1400);
+  function getConnector() {
+    window.forge.openExternal?.('https://forge3d.design/download/forge3d-cloud.mcpb');
   }
 
   return (
     <div className="hd-connect">
-      <button className={'btn' + (bridgeRunning ? ' primary' : '')} onClick={() => (bridgeEnabled ? setOpen((o) => !o) : toggle())}>
-        <span className={'hd-dot ' + (bridgeRunning ? 'on' : bridgeEnabled ? 'wait' : 'off')} />
-        {bridgeRunning ? 'Connected to Claude' : bridgeEnabled ? 'Starting…' : 'Connect to Claude'}
+      <button className={'btn' + (bridgeRunning ? ' primary' : '')} onClick={() => setOpen((o) => !o)}>
+        <span className={'hd-dot ' + (bridgeRunning ? 'on' : 'off')} />
+        {bridgeRunning ? 'Connected (live app)' : 'Connect to Claude'}
       </button>
 
       {open && (
         <div className="hd-pop" onMouseLeave={() => setOpen(false)}>
-          <div className="hd-pop-row">
-            <b>Claude control bridge</b>
-            <span className={'prov-tag ' + (bridgeEnabled ? 'free' : 'paid')}>{bridgeEnabled ? 'ON' : 'OFF'}</span>
-          </div>
+          {/* EASIEST — the online one-click connector */}
+          <div className="hd-pop-row"><b>Connect to Claude Desktop</b><span className="prov-tag free">EASIEST</span></div>
           <p className="muted small">
-            {bridgeEnabled
-              ? `Listening on 127.0.0.1:${bridgePort}. Add this to your Claude MCP config, then ask Claude to “design a sumo robot”.`
-              : 'Opens a localhost-only bridge so Claude can build in your live app.'}
+            Get the one-click connector and drop it into Claude Desktop — Claude designs for you
+            through the Forge3D online server. No account, no API key, no setup.
           </p>
-          {bridgeEnabled && (
-            <>
-              <pre className="hd-code">{snippet}</pre>
-              <div className="row">
-                <button className="btn" onClick={copy}>{copied ? '✓ Copied' : 'Copy config'}</button>
-                <button className="btn danger" onClick={toggle}>Turn off</button>
+          <button className="btn primary full" onClick={getConnector}>⬇ Get the Claude connector</button>
+          <p className="muted small" style={{ marginTop: 6 }}>
+            Double-click the downloaded <code>.mcpb</code> → Install in Claude Desktop → it appears under <b>+ → Connectors</b>.
+          </p>
+
+          <div className="divider" />
+
+          {/* ADVANCED — drive THIS live app via the localhost bridge */}
+          <button className="linkish" onClick={() => setShowAdvanced((v) => !v)}>
+            {showAdvanced ? '▾' : '▸'} Advanced: drive THIS live app
+          </button>
+          {showAdvanced && (
+            <div style={{ marginTop: 6 }}>
+              <p className="muted small">
+                Opens a localhost-only bridge so Claude builds right in your open viewport.
+                Turn it on, then use the connector above.
+              </p>
+              <div className="hd-pop-row">
+                <span className={'tok ' + (bridgeRunning ? 'ok' : '')}>
+                  {bridgeEnabled ? (bridgeRunning ? `listening · 127.0.0.1:${bridgePort}` : 'starting…') : 'off'}
+                </span>
+                <button className={'btn' + (bridgeEnabled ? ' danger' : ' primary')} onClick={toggleBridge}>
+                  {bridgeEnabled ? 'Turn off' : 'Turn on'}
+                </button>
               </div>
-            </>
+            </div>
           )}
-          {!bridgeEnabled && <button className="btn primary full" onClick={toggle}>Turn on the bridge</button>}
         </div>
       )}
     </div>

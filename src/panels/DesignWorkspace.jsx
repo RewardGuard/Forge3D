@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Viewport3D from '../components/Viewport3D.jsx';
 import MeshyPanel from '../components/MeshyPanel.jsx';
 import ThingiversePanel from '../components/ThingiversePanel.jsx';
+import AiDesignPanel from '../components/AiDesignPanel.jsx';
 import Inspector from '../components/Inspector.jsx';
 import { useStore } from '../lib/store.js';
 import { exportSceneToGltf, exportSceneToGlb } from '../lib/exportScene.js';
@@ -52,21 +53,16 @@ export default function DesignWorkspace() {
   return (
     <div className="layout three-col">
       <aside className="sidebar left" style={{ flexDirection: 'column' }}>
-        <div className="seg" style={{ padding: '12px 14px 0' }}>
-          <button
-            className={'seg-btn' + (source === 'generate' ? ' on' : '')}
-            onClick={() => setSource('generate')}
-          >
-            AI Generate
-          </button>
-          <button
-            className={'seg-btn' + (source === 'thingiverse' ? ' on' : '')}
-            onClick={() => setSource('thingiverse')}
-          >
-            Thingiverse
-          </button>
+        <div className="seg" style={{ padding: '12px 14px 0', flexWrap: 'wrap', gap: 6 }}>
+          <button className={'seg-btn' + (source === 'generate' ? ' on' : '')} onClick={() => setSource('generate')}>AI Generate</button>
+          <button className={'seg-btn' + (source === 'claude' ? ' on' : '')} onClick={() => setSource('claude')}>Claude Design</button>
+          <button className={'seg-btn' + (source === 'orchestra' ? ' on' : '')} onClick={() => setSource('orchestra')}>✦ Orchestra</button>
+          <button className={'seg-btn' + (source === 'thingiverse' ? ' on' : '')} onClick={() => setSource('thingiverse')}>Thingiverse</button>
         </div>
-        {source === 'generate' ? <MeshyPanel /> : <ThingiversePanel />}
+        {source === 'generate' && <MeshyPanel />}
+        {source === 'claude' && <AiDesignPanel mode="claude" />}
+        {source === 'orchestra' && <AiDesignPanel mode="orchestra" />}
+        {source === 'thingiverse' && <ThingiversePanel />}
       </aside>
 
       <section className="viewport">
