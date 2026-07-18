@@ -53,6 +53,8 @@ export const TOOL_DEFS = [
   { name: 'done', description: 'Finish: provide a short summary of what was built.', inputSchema: { type: 'object', properties: { summary: str('what was built') } } },
 
   { name: 'orchestrate', description: 'Hand a full high-level goal to the in-app Orchestra director and let it run the whole multi-step build autonomously. Returns the final status + a step timeline.', inputSchema: { type: 'object', properties: { goal: str('the whole project to build') }, required: ['goal'] } },
+
+  { name: 'open_app', description: 'Open (launch) the Forge3D desktop app on this computer so your work appears live in its 3D viewport. Call this FIRST if the app might be closed. If it is already running it just focuses it. Needs the app with its "Connect to Claude" bridge on; if the bridge is off it returns a note asking the user to enable it.', inputSchema: { type: 'object', properties: {} } },
 ];
 
 // ---------------------------------------------------------------------------
@@ -76,6 +78,7 @@ const TITLES = {
   check_indicators: 'Check indicator LEDs (report)', validate_structure: 'Validate & auto-fix structure',
   validate_manufacture: 'Validate manufacturability', validate_integration: 'Validate part integration',
   done: 'Finish run', orchestrate: 'Build whole project autonomously',
+  open_app: 'Open the Forge3D desktop app',
 };
 // pure reads (no scene/state change)
 const READ_ONLY = new Set(['get_state', 'get_netlist', 'parts_catalog', 'get_sim_report', 'look', 'screenshot', 'check_circuit', 'check_motors', 'check_indicators', 'validate_manufacture', 'validate_integration', 'done', 'search_thingiverse']);

@@ -15,6 +15,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { spawn } from 'node:child_process';
 import { TOOL_DEFS } from '../orchestra-mcp/tools.mjs';
 
 const CLOUD_URL = process.env.FORGE3D_CLOUD_URL || 'https://forge3d.design/mcp';
@@ -30,6 +31,26 @@ async function localOnline() {
   catch { localOK = false; }
   localUntil = Date.now() + 4000;
   return localOK;
+}
+
+// --- launch the desktop app (this process runs on the user's machine) ---
+// The bridge lives INSIDE the app, so "open the app" can't go through it — it
+// runs locally here. Cross-platform best effort; macOS is exact via bundle id.
+function launchApp() {
+  try {
+    if (process.platform === 'darwin') spawn('open', ['-b', 'com.forge3d.app'], { detached: true, stdio: 'ignore' }).unref();
+    else if (process.platform === 'win32') spawn('cmd', ['/c', 'start', '', 'Forge3D'], { detached: true, stdio: 'ignore', shell: true }).unref();
+    else spawn('sh', ['-c', 'forge3d >/dev/null 2>&1 || Forge3D >/dev/null 2>&1 &'], { detached: true, stdio: 'ignore' }).unref();
+    return true;
+  } catch { return false; }
+}
+async function waitForBridge(ms = 15000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    try { if ((await fetch(LOCAL_BRIDGE + '/health', { signal: AbortSignal.timeout(800) })).ok) return true; } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  return false;
 }
 
 // --- lazy cloud MCP client (fallback when the app isn't open) ---
@@ -57,8 +78,23 @@ function formatLocal(out) {
 
 const server = new Server({ name: 'forge3d', version: '0.1.0' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFS }));
+const okText = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj) }], isError: obj.ok === false });
+
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
+
+  // open_app is handled HERE (never forwarded) — the app must be launched by this
+  // local process, then we wait for its Connect-to-Claude bridge to come up.
+  if (name === 'open_app') {
+    if (await localOnline()) return okText({ ok: true, status: 'Forge3D is already open and connected.' });
+    launchApp();
+    const up = await waitForBridge();
+    localUntil = 0; // invalidate the health cache so the next tool sees it live
+    return okText(up
+      ? { ok: true, status: 'Opened Forge3D — connected to the live app. Your builds will appear in its viewport.' }
+      : { ok: false, status: 'Launched Forge3D, but its control bridge is off. In the app, click "Connect to Claude" (top-right) → Turn on the bridge, then try again.' });
+  }
+
   // 1) drive the LIVE app if it's open → the build appears in the viewport
   if (await localOnline()) {
     try {
