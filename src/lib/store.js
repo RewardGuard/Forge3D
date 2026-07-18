@@ -142,6 +142,10 @@ export const useStore = create((set, get) => ({
       return { orchestraSteps: steps };
     }),
 
+  // ---- camera view request (set_view tool → CameraRig snaps the angle) ----
+  cameraView: null, // { view:'front|back|left|right|top|iso', t:timestamp } | null
+  setCameraView: (view) => set({ cameraView: { view, t: Date.now() } }),
+
   // ---- UI / theme ----
   theme: 'dark', // dark | light
   toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),

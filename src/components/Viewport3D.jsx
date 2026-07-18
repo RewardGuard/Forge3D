@@ -1,6 +1,6 @@
 import React, { useRef, useMemo, useEffect, Suspense } from 'react';
 import * as THREE from 'three';
-import { Canvas, useLoader } from '@react-three/fiber';
+import { Canvas, useLoader, useThree, useFrame } from '@react-three/fiber';
 import {
   OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment, useGLTF, TransformControls,
   ContactShadows, SoftShadows,
@@ -436,10 +436,33 @@ export default function Viewport3D() {
       ))}
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
+      <CameraRig />
       <CaptureFramer />
       <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="#cbd5e1" />
       </GizmoHelper>
     </Canvas>
   );
+}
+
+// Snaps the camera to a preset angle when the `set_view` tool bumps cameraView.
+// Additive + one-shot (acts only when the request timestamp changes), so it never
+// fights the user's OrbitControls.
+const VIEW_DIRS = {
+  front: [0, 1, 4], back: [0, 1, -4], left: [-4, 1, 0], right: [4, 1, 0],
+  top: [0, 4.2, 0.001], iso: [3.2, 2.6, 3.2],
+};
+function CameraRig() {
+  const cameraView = useStore((s) => s.cameraView);
+  const { camera, controls } = useThree();
+  const applied = useRef(0);
+  useFrame(() => {
+    if (!cameraView || cameraView.t === applied.current) return;
+    applied.current = cameraView.t;
+    const p = VIEW_DIRS[cameraView.view] || VIEW_DIRS.iso;
+    camera.position.set(p[0], p[1], p[2]);
+    camera.lookAt(0, 0, 0);
+    if (controls) { controls.target.set(0, 0, 0); controls.update(); }
+  });
+  return null;
 }

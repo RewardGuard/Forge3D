@@ -32,6 +32,28 @@ export function compactCatalog() {
 const S = () => useStore.getState();
 const MM = SCENE_SCALE / 1000; // millimetres -> scene units
 const PRIMITIVE_KINDS = ['box', 'sphere', 'cylinder', 'cone', 'pyramid', 'torus', 'capsule', 'plane', 'tetrahedron', 'icosahedron'];
+
+// ---- lightweight undo/redo: snapshot the scene before every mutating tool ----
+const HISTORY_MAX = 40;
+const _undo = [];
+const _redo = [];
+const _snap = () => JSON.stringify({ meshes: S().meshes, nodes: S().nodes, wires: S().wires, codeByNode: S().codeByNode });
+const _restore = (snap) => {
+  const o = JSON.parse(snap);
+  useStore.setState({ meshes: o.meshes, nodes: o.nodes, wires: o.wires, codeByNode: o.codeByNode, selectedMeshId: null, selectedMeshIds: [], selectedNodeId: null, pendingPin: null });
+};
+function pushHistory() { _undo.push(_snap()); if (_undo.length > HISTORY_MAX) _undo.shift(); _redo.length = 0; }
+function popHistory(dir) {
+  if (dir === 'undo') { if (!_undo.length) return false; _redo.push(_snap()); _restore(_undo.pop()); return true; }
+  if (!_redo.length) return false; _undo.push(_snap()); _restore(_redo.pop()); return true;
+}
+// tools that don't change the scene → no snapshot (pure reads, camera/sim/tab, i/o)
+const NO_SNAPSHOT = new Set([
+  'get_state', 'get_netlist', 'parts_catalog', 'get_sim_report', 'look', 'screenshot',
+  'check_circuit', 'check_motors', 'check_indicators', 'validate_manufacture', 'validate_integration',
+  'done', 'search_thingiverse', 'measure', 'undo', 'redo', 'set_view', 'set_tab', 'run_sim',
+  'pause_sim', 'set_input', 'set_joystick', 'save_project', 'export_production',
+]);
 const MOTORISH = new Set(['dc-motor', 'servo-sg90', 'servo-mg996', 'stepper-28byj', 'stepper-nema17', 'vibration-motor', 'pump-12v', 'linear-actuator']);
 
 function mockKind(prompt) {
@@ -538,6 +560,86 @@ export const TOOLS = {
     },
   },
 
+  duplicate: {
+    desc: 'Duplicate an object by id — an offset copy in place. Returns the new id.',
+    params: { id: 'mesh id' },
+    run: ({ id }) => {
+      if (!S().meshes.some((m) => m.id === id)) throw new Error(`no mesh "${id}"`);
+      S().duplicateMesh(id);
+      return { newId: S().selectedMeshId, from: id };
+    },
+  },
+
+  align: {
+    desc: 'Align objects along an axis. mode min|max|center snaps each object position on that axis to the group edge or centre.',
+    params: { ids: '[mesh id,…] (>=2)', axis: 'x|y|z', mode: 'min|max|center (default center)' },
+    run: ({ ids, axis, mode = 'center' }) => {
+      const ax = { x: 0, y: 1, z: 2 }[axis];
+      if (ax == null) throw new Error('axis must be x, y or z');
+      if (!Array.isArray(ids) || ids.length < 2) throw new Error('align needs >= 2 ids');
+      const meshes = ids.map((id) => S().meshes.find((m) => m.id === id)).filter(Boolean);
+      if (meshes.length < 2) throw new Error('need >= 2 valid ids');
+      const vals = meshes.map((m) => m.position[ax]);
+      const target = mode === 'min' ? Math.min(...vals) : mode === 'max' ? Math.max(...vals) : vals.reduce((a, b) => a + b, 0) / vals.length;
+      const patches = {};
+      for (const m of meshes) { const p = [...m.position]; p[ax] = target; patches[m.id] = { position: p }; }
+      S().updateMeshes(patches);
+      return { aligned: meshes.length, axis, mode, target: +target.toFixed(4) };
+    },
+  },
+
+  rotate: {
+    desc: 'Rotate an object by exact DEGREES around an axis (adds to its current rotation). Friendlier than move_mesh radians.',
+    params: { id: 'mesh id', axis: 'x|y|z', degrees: 'number' },
+    run: ({ id, axis, degrees }) => {
+      const ax = { x: 0, y: 1, z: 2 }[axis];
+      if (ax == null) throw new Error('axis must be x, y or z');
+      const mesh = S().meshes.find((m) => m.id === id);
+      if (!mesh) throw new Error(`no mesh "${id}"`);
+      const rot = [...(mesh.rotation || [0, 0, 0])];
+      rot[ax] += (Number(degrees) || 0) * Math.PI / 180;
+      S().updateMesh(id, { rotation: rot });
+      return { id, axis, degrees, rotation_deg: rot.map((r) => +(r * 180 / Math.PI).toFixed(1)) };
+    },
+  },
+
+  measure: {
+    desc: 'Measure in real millimetres. One id → its position (mm) + scale; two ids → the centre-to-centre distance (mm). Read-only.',
+    params: { id: 'mesh id', toId: 'second mesh id (opt) — returns distance' },
+    run: ({ id, toId }) => {
+      const a = S().meshes.find((m) => m.id === id);
+      if (!a) throw new Error(`no mesh "${id}"`);
+      if (toId) {
+        const b = S().meshes.find((m) => m.id === toId);
+        if (!b) throw new Error(`no mesh "${toId}"`);
+        const d = Math.hypot(a.position[0] - b.position[0], a.position[1] - b.position[1], a.position[2] - b.position[2]);
+        return { from: id, to: toId, distance_mm: +(d / MM).toFixed(2) };
+      }
+      return { id, position_mm: a.position.map((n) => +(n / MM).toFixed(2)), scale: a.scale ?? 1 };
+    },
+  },
+
+  undo: {
+    desc: 'Undo the last scene edit (restores the previous state).',
+    params: {},
+    run: () => (popHistory('undo') ? { undone: true } : { undone: false, note: 'nothing to undo' }),
+  },
+  redo: {
+    desc: 'Redo the last undone edit.',
+    params: {},
+    run: () => (popHistory('redo') ? { redone: true } : { redone: false, note: 'nothing to redo' }),
+  },
+
+  set_view: {
+    desc: 'Point the 3D camera at a preset angle for a clean screenshot: front|back|left|right|top|iso. Follow with screenshot/look.',
+    params: { view: 'front|back|left|right|top|iso' },
+    run: ({ view }) => {
+      const v = ['front', 'back', 'left', 'right', 'top', 'iso'].includes(view) ? view : 'iso';
+      S().setCameraView(v);
+      return { view: v };
+    },
+  },
+
   done: {
     desc: 'Finish the run. Provide a short summary of what was built.',
     params: { summary: 'string' },
@@ -562,6 +664,7 @@ export async function runTool(name, args = {}) {
   const tool = TOOLS[name];
   if (!tool) return { ok: false, error: `unknown tool "${name}"` };
   try {
+    if (!NO_SNAPSHOT.has(name)) pushHistory(); // enables undo/redo for scene edits
     const result = await tool.run(args || {});
     return { ok: true, result };
   } catch (e) {

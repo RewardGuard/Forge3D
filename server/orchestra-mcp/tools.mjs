@@ -52,6 +52,14 @@ export const TOOL_DEFS = [
   { name: 'validate_integration', description: 'Check that each electronic is mounted on a real exterior face, indicators face outward, and nothing is buried in a wall. Run design_structure first.', inputSchema: { type: 'object', properties: {} } },
   { name: 'done', description: 'Finish: provide a short summary of what was built.', inputSchema: { type: 'object', properties: { summary: str('what was built') } } },
 
+  { name: 'duplicate', description: 'Duplicate an object by id — an offset copy. Returns the new id.', inputSchema: { type: 'object', properties: { id: str('mesh id') }, required: ['id'] } },
+  { name: 'align', description: 'Align 2+ objects along an axis. mode min|max|center snaps each object position on that axis to the group edge or centre.', inputSchema: { type: 'object', properties: { ids: { type: 'array', items: str(), description: 'mesh ids (>=2)' }, axis: str('x|y|z'), mode: str('min|max|center (default center)') }, required: ['ids', 'axis'] } },
+  { name: 'rotate', description: 'Rotate an object by exact DEGREES around an axis (adds to current rotation).', inputSchema: { type: 'object', properties: { id: str('mesh id'), axis: str('x|y|z'), degrees: num('degrees, +/-') }, required: ['id', 'axis', 'degrees'] } },
+  { name: 'measure', description: 'Measure in real millimetres. One id → its position (mm) + scale; two ids → centre-to-centre distance (mm). Read-only.', inputSchema: { type: 'object', properties: { id: str('mesh id'), toId: str('second mesh id (optional) → distance') }, required: ['id'] } },
+  { name: 'undo', description: 'Undo the last scene edit (restores the previous state).', inputSchema: { type: 'object', properties: {} } },
+  { name: 'redo', description: 'Redo the last undone edit.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'set_view', description: 'Point the 3D camera at a preset angle for a clean screenshot: front|back|left|right|top|iso. Then call screenshot/look.', inputSchema: { type: 'object', properties: { view: str('front|back|left|right|top|iso') }, required: ['view'] } },
+
   { name: 'orchestrate', description: 'Hand a full high-level goal to the in-app Orchestra director and let it run the whole multi-step build autonomously. Returns the final status + a step timeline.', inputSchema: { type: 'object', properties: { goal: str('the whole project to build') }, required: ['goal'] } },
 
   { name: 'open_app', description: 'Open (launch) the Forge3D desktop app on this computer so your work appears live in its 3D viewport. Call this FIRST if the app might be closed. If it is already running it just focuses it. Needs the app with its "Connect to Claude" bridge on; if the bridge is off it returns a note asking the user to enable it.', inputSchema: { type: 'object', properties: {} } },
@@ -79,9 +87,11 @@ const TITLES = {
   validate_manufacture: 'Validate manufacturability', validate_integration: 'Validate part integration',
   done: 'Finish run', orchestrate: 'Build whole project autonomously',
   open_app: 'Open the Forge3D desktop app',
+  duplicate: 'Duplicate object', align: 'Align objects', rotate: 'Rotate object (degrees)',
+  measure: 'Measure size / distance', undo: 'Undo last edit', redo: 'Redo edit', set_view: 'Set camera angle',
 };
 // pure reads (no scene/state change)
-const READ_ONLY = new Set(['get_state', 'get_netlist', 'parts_catalog', 'get_sim_report', 'look', 'screenshot', 'check_circuit', 'check_motors', 'check_indicators', 'validate_manufacture', 'validate_integration', 'done', 'search_thingiverse']);
+const READ_ONLY = new Set(['get_state', 'get_netlist', 'parts_catalog', 'get_sim_report', 'look', 'screenshot', 'check_circuit', 'check_motors', 'check_indicators', 'validate_manufacture', 'validate_integration', 'done', 'search_thingiverse', 'measure']);
 // replace/reset existing work
 const DESTRUCTIVE = new Set(['orchestrate', 'build_blueprint', 'design_structure', 'remove_mesh']);
 for (const t of TOOL_DEFS) {
