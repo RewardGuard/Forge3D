@@ -1,6 +1,7 @@
-import React, { useRef, useMemo, useEffect, useState } from 'react';
+import React, { useRef, useMemo, useEffect, useState, Suspense } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Physics, RigidBody, CuboidCollider } from '@react-three/rapier';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment, ContactShadows, Html } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
@@ -92,74 +93,45 @@ const SMOKE_N = 6;
 
 const INPUT_KINDS = new Set(['push-button', 'toggle-switch', 'potentiometer', 'joystick']);
 
-// Rigid-unit gravity with REAL geometry collisions. Both the falling object's
-// bottom AND the surface it lands on come from the ACTUAL rendered meshes
-// (world bounding box + downward raycasts) — no AABB approximations, so a
-// loaded tire model never sinks and parts drop into carved sockets.
-const DOWN = new THREE.Vector3(0, -1, 0);
-function GravityEngine({ units, running, fallRef }) {
-  const { scene } = useThree();
-  const rc = useRef(new THREE.Raycaster());
-  const box = useRef(new THREE.Box3());
-
-  useFrame((_, dtRaw) => {
-    const S = fallRef.current;
-    if (!running) { S.off = {}; S.vy = {}; return; }
-    const dt = Math.min(0.05, dtRaw);
-
-    // unit root groups currently in the scene, by unit id
-    const rootsByUnit = {};
-    scene.traverse((o) => {
-      if (o.userData?.isUnitRoot && o.userData.collidable && o.userData.unitKey) {
-        (rootsByUnit[o.userData.unitKey] = rootsByUnit[o.userData.unitKey] || []).push(o);
-      }
-    });
-    const allRoots = Object.values(rootsByUnit).flat();
-    // Re-evaluate every unit every frame (no permanent "settled" flag): an object
-    // resting on another that is itself still falling must keep tracking it down,
-    // otherwise the upper object freezes mid-air when the lower one drops away.
-    for (const u of units) {
-      const roots = rootsByUnit[u.id];
-      if (!roots || !roots.length) continue;
-
-      // TRUE current world AABB of the whole unit (all its meshes)
-      const b = box.current.makeEmpty();
-      for (const g of roots) b.expandByObject(g);
-      if (b.isEmpty()) continue;
-      const bottom = b.min.y;
-      const cx = (b.min.x + b.max.x) / 2, cz = (b.min.z + b.max.z) / 2;
-      const ex = Math.max(0, (b.max.x - b.min.x) / 2 - 0.03);
-      const ez = Math.max(0, (b.max.z - b.min.z) / 2 - 0.03);
-      const samples = [[cx, cz], [cx - ex, cz - ez], [cx + ex, cz - ez], [cx - ex, cz + ez], [cx + ex, cz + ez]];
-
-      // everything collidable that isn't this unit
-      const others = allRoots.filter((o) => o.userData.unitKey !== u.id);
-
-      // highest real surface under the footprint (ground = 0)
-      let restAt = 0;
-      for (const [px, pz] of samples) {
-        rc.current.set(new THREE.Vector3(px, bottom + 8, pz), DOWN);
-        rc.current.far = 1000;
-        const hits = rc.current.intersectObjects(others, true);
-        for (const hit of hits) {
-          if (hit.point.y <= bottom + 0.02) { restAt = Math.max(restAt, hit.point.y); break; }
-        }
-      }
-
-      let vy = (S.vy[u.id] ?? 0) - 9.8 * dt;
-      let dy = vy * dt;
-      if (bottom + dy <= restAt + 1e-3 && vy <= 0) {
-        dy = restAt - bottom; // rest exactly on the real surface (re-checked each frame)
-        vy = 0;
-      }
-      S.off[u.id] = (S.off[u.id] ?? 0) + dy;
-      S.vy[u.id] = vy;
-    }
-  });
-  return null;
+// REAL physics: Rapier (github.com/dimforge/rapier, Rust→WASM) via
+// @react-three/rapier. Each rigid unit becomes a dynamic RigidBody with
+// shape-appropriate colliders — spheres get ball colliders (true rolling),
+// boxes cuboids, everything else a convex hull — so objects collide, push,
+// stack, tumble and roll down slopes for real. This replaces the old
+// hand-rolled vertical-raycast gravity (which had no collision response).
+function collidersForUnit(unit) {
+  const kinds = unit.members.map((m) => m.kind);
+  if (kinds.every((k) => k === 'sphere')) return 'ball';
+  if (kinds.every((k) => k === 'box' || k === 'plane')) return 'cuboid';
+  return 'hull';
 }
+// Async-loaded models (STL/meshy) mount AFTER the body is created, so the auto
+// colliders miss them — give each an explicit cuboid from its half extents.
+const isLoadedModelMesh = (m) => (m.kind === 'meshy' || m.kind === 'stl') && m.modelUrl;
+function modelColliderArgs(m) {
+  const s = m.scale ?? 1;
+  const sc = Array.isArray(s) ? s : [s, s, s];
+  const h = m.half || [0.5, 0.5, 0.5];
+  return [Math.max(0.02, h[0] * sc[0]), Math.max(0.02, h[1] * sc[1]), Math.max(0.02, h[2] * sc[2])];
+}
+// Objects authored slightly BELOW y=0 (e.g. a pyramid whose center sits at 0.5
+// but is 1.4 tall) would spawn inside the floor — Rapier's depenetration then
+// catapults them (and anything touching them). Lift each unit so its lowest
+// member bottom starts at/above the floor.
+function memberBottom(m) {
+  const uni = Array.isArray(m.scale) ? Math.max(...m.scale) : (m.scale ?? 1);
+  const sy = Array.isArray(m.scale) ? m.scale[1] : (m.scale ?? 1);
+  let half = 0.5 * sy; // unit-height primitives (box, cone, pyramid, cylinder…)
+  if (m.kind === 'sphere') half = 0.5 * uni;
+  else if (m.kind === 'torus') half = 0.4 * uni;
+  else if (m.kind === 'plane') half = 0.01;
+  else if (m.kind === 'baked' && m.halfY != null) half = m.halfY;
+  else if ((m.kind === 'meshy' || m.kind === 'stl') && m.half) half = m.half[1] * uni;
+  return (m.position?.[1] ?? 0) - half;
+}
+const unitLift = (u) => Math.max(0, ...u.members.map((m) => -memberBottom(m) + 0.002));
 
-function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running, unitKey, fallRef }) {
+function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }) {
   const setInput = useStore((s) => s.setInput);
   const toggleInput = useStore((s) => s.toggleInput);
   const inputs = useStore((s) => s.inputs);
@@ -195,12 +167,9 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running, 
   const loadedModel = useLoadedModel(mesh); // null until loaded / on failure — never suspends
 
   useFrame((st, dt) => {
-    // ---- position: authored position + the unit's shared fall offset ----
+    // ---- position: authored (local to the unit's RigidBody — Rapier moves it) ----
     const root = rootRef.current;
-    if (root) {
-      const off = running && unitKey ? (fallRef?.current?.off?.[unitKey] ?? 0) : 0;
-      root.position.set(mesh.position[0], mesh.position[1] + off, mesh.position[2]);
-    }
+    if (root) root.position.set(mesh.position[0], mesh.position[1], mesh.position[2]);
     const s = stateRef.current?.objects?.[mesh.id];
     const body = bodyRef.current;
     if (!body) return;
@@ -322,7 +291,6 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running, 
       ref={rootRef}
       position={mesh.position}
       rotation={mesh.rotation || [0, 0, 0]}
-      userData={{ unitKey: unitKey || null, collidable: !mesh.negative && unitKey != null, isUnitRoot: true }}
       {...inputHandlers}
     >
       <group ref={bodyRef} scale={scaleArr(mesh.scale)}>
@@ -371,18 +339,49 @@ function HazardMarker({ hazard }) {
   );
 }
 
-function Engine({ running, hazards, onReport, stateRef, resetSignal, drivenIds }) {
+function Engine({ running, hazards, onReport, stateRef, resetSignal, drivenIds, units, bodyRefs, unitOf }) {
   const meshes = useStore((s) => s.meshes);
   const acc = useRef(0);
+  const q = useRef(new THREE.Quaternion());
+  const v = useRef(new THREE.Vector3());
+  // Re-init ONLY when the scene or an explicit reset changes. `onReport` must NOT
+  // be a dep: parents pass a fresh arrow every render, so having it here re-ran
+  // this effect after every report tick (~0.15s) and silently RESET the whole sim
+  // state — heat never accumulated and hazards appeared to do nothing.
   useEffect(() => {
     stateRef.current = initLifeState(meshes);
     onReport(stateRef.current);
-  }, [meshes, resetSignal, stateRef, onReport]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meshes, resetSignal]);
 
   useFrame((_, dtRaw) => {
     if (!running) return;
     const dt = Math.min(0.05, dtRaw);
-    stateRef.current = stepLifeState(stateRef.current || initLifeState(meshes), meshes, hazards, dt, drivenIds);
+    // Heat/fire distances use the LIVE physics positions (bodies move now):
+    // world pos of a member = bodyQuat * authoredLocal + bodyTranslation.
+    let liveMeshes = meshes;
+    if (units && bodyRefs) {
+      const live = {};
+      for (const u of units) {
+        const api = bodyRefs.current[u.id];
+        if (!api) continue;
+        try {
+          const t = api.translation();
+          const r = api.rotation();
+          q.current.set(r.x, r.y, r.z, r.w);
+          for (const m of u.members) {
+            v.current.set(m.position[0], m.position[1], m.position[2]).applyQuaternion(q.current);
+            live[m.id] = [v.current.x + t.x, v.current.y + t.y, v.current.z + t.z];
+          }
+        } catch { /* body despawned mid-frame */ }
+      }
+      liveMeshes = meshes.map((m) => {
+        const rep = unitOf?.[m.id];
+        return rep && live[m.id] ? { ...m, position: live[m.id] } : m;
+      });
+      if (import.meta.env?.DEV) window.__simLive = live; // dev-only physics probe
+    }
+    stateRef.current = stepLifeState(stateRef.current || initLifeState(meshes), liveMeshes, hazards, dt, drivenIds);
     acc.current += dt;
     if (acc.current > 0.15) { acc.current = 0; onReport(stateRef.current); }
   });
@@ -507,7 +506,23 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
     }
     return { units: Object.values(byRep), unitOf: map };
   }, [renderMeshes]);
-  const fallRef = useRef({ off: {}, vy: {} });
+  const bodyRefs = useRef({});
+  // Impact damage: a FAST collision chips integrity (visible in the Durability
+  // panel). Speed-gated so resting contact of heavy objects never hurts them.
+  const impactFor = (u) => (e) => {
+    if (!stateRef.current?.objects) return;
+    const api = bodyRefs.current[u.id];
+    if (!api) return;
+    const lv = api.linvel();
+    const speed = Math.hypot(lv.x, lv.y, lv.z);
+    if (speed < 2.2 || e.totalForceMagnitude < 40) return;
+    const dmg = Math.min(0.25, (speed - 2.2) * 0.04);
+    for (const m of u.members) {
+      const o = stateRef.current.objects[m.id];
+      if (o && !o.destroyed) { o.integrity = Math.max(0, o.integrity - dmg); if (o.integrity <= 0) o.destroyed = true; }
+    }
+  };
+  const negatives = renderMeshes.filter((m) => m.negative);
 
   return (
     <Canvas shadows camera={{ position: [3, 2.2, 3.2], fov: 45 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true }}>
@@ -519,25 +534,51 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
       <Grid args={[24, 24]} cellSize={0.1} cellColor="#1c2530" sectionSize={1} sectionColor="#2a3a4d" fadeDistance={20} infiniteGrid />
       <ContactShadows position={[0, 0.001, 0]} opacity={theme === 'light' ? 0.35 : 0.55} scale={14} blur={2.4} far={6} resolution={1024} />
 
-      {renderMeshes.map((m) => (
-        <SimMesh
-          key={m.id}
-          mesh={m}
-          spinning={running && m.id in spinMeta}
-          spinDir={spinMeta[m.id] || 1}
-          stateRef={stateRef}
-          materialKey={matByMesh[m.id]}
-          running={running}
-          unitKey={unitOf[m.id]}
-          fallRef={fallRef}
-        />
+      <Suspense fallback={null}>
+        <Physics key={resetSignal || 0} paused={!running}>
+          {/* the floor: a fixed slab whose top surface is exactly y = 0 */}
+          <RigidBody type="fixed" colliders={false}>
+            <CuboidCollider args={[60, 0.5, 60]} position={[0, -0.5, 0]} />
+          </RigidBody>
+          {units.map((u) => (
+            <RigidBody
+              key={u.id + ':' + u.members.length}
+              ref={(api) => { if (api) bodyRefs.current[u.id] = api; else delete bodyRefs.current[u.id]; }}
+              position={[0, unitLift(u), 0]}
+              colliders={collidersForUnit(u)}
+              friction={0.7}
+              restitution={0.15}
+              ccd
+              onContactForce={impactFor(u)}
+            >
+              {u.members.map((m) => (
+                <SimMesh
+                  key={m.id}
+                  mesh={m}
+                  spinning={running && m.id in spinMeta}
+                  spinDir={spinMeta[m.id] || 1}
+                  stateRef={stateRef}
+                  materialKey={matByMesh[m.id]}
+                  running={running}
+                />
+              ))}
+              {u.members.filter(isLoadedModelMesh).map((m) => (
+                <CuboidCollider key={'mc' + m.id} args={modelColliderArgs(m)} position={m.position} rotation={m.rotation || [0, 0, 0]} />
+              ))}
+            </RigidBody>
+          ))}
+        </Physics>
+      </Suspense>
+
+      {/* stray negatives are visual cutting tools — rendered, but no physics */}
+      {negatives.map((m) => (
+        <SimMesh key={m.id} mesh={m} stateRef={stateRef} materialKey={matByMesh[m.id]} running={running} />
       ))}
-      <GravityEngine units={units} running={running} fallRef={fallRef} />
       {hazards.map((h) => (
         <HazardMarker key={h.id} hazard={h} />
       ))}
 
-      <Engine running={running} hazards={hazards} onReport={onReport} stateRef={stateRef} resetSignal={resetSignal} drivenIds={new Set(Object.keys(spinMeta))} />
+      <Engine running={running} hazards={hazards} onReport={onReport} stateRef={stateRef} resetSignal={resetSignal} drivenIds={new Set(Object.keys(spinMeta))} units={units} bodyRefs={bodyRefs} unitOf={unitOf} />
       <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
       <CaptureFramer />
       <GizmoHelper alignment="bottom-right" margin={[64, 64]}>

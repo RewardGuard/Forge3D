@@ -1,6 +1,6 @@
 {
   "name": "forge3d",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Forge3D — AI 3D design + circuit simulator + sticker-circuit exporter",
   "author": "Forge3D",
   "license": "MIT",
@@ -21,6 +21,7 @@
   "dependencies": {
     "@react-three/drei": "^9.114.0",
     "@react-three/fiber": "^8.17.10",
+    "@react-three/rapier": "^1.5.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.169.0",
