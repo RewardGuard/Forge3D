@@ -94,6 +94,44 @@ function pairOwner(req) {
 }
 
 // ---------------------------------------------------------------------------
+// F3D Storage remote access — per-ACCOUNT auth (separate from the single-tenant
+// pairing above). Verifies the caller's Forge3D Cloud account token against the
+// billing service's own /me (same box, called over loopback) and only allows
+// through if that account's paid plan includes storage. The files themselves
+// NEVER touch this server — this only brokers relay calls to the user's own
+// paired Mac (server/cloud-mcp/desktopRelay.mjs), keyed by their account email.
+// ---------------------------------------------------------------------------
+const ACCOUNTS_API = process.env.FORGE3D_ACCOUNTS_API || 'http://127.0.0.1:8787';
+const meCache = new Map(); // token -> { at, data }
+async function accountMe(token) {
+  const cached = meCache.get(token);
+  if (cached && Date.now() - cached.at < 5000) return cached.data;
+  let data = null;
+  try {
+    const r = await fetch(ACCOUNTS_API + '/me', { headers: { authorization: 'Bearer ' + token } });
+    if (r.ok) data = await r.json();
+  } catch { /* accounts API unreachable — treat as unauthenticated */ }
+  meCache.set(token, { at: Date.now(), data });
+  return data;
+}
+async function storageAuth(req) {
+  const tok = bearer(req);
+  if (!tok) return null;
+  const me = await accountMe(tok);
+  if (!me?.email) return null;
+  return { email: me.email, owner: 'storage:' + me.email, entitled: Boolean(me.storage?.plan && me.storage.plan !== 'none') };
+}
+function readBodyBuffer(req, limit = 12 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => { size += c.length; if (size > limit) { reject(new Error('body too large')); req.destroy(); return; } chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // MCP server (one per request — stateless). Routes each tool call to the live
 // desktop if paired, else to the headless cloud engine.
 // ---------------------------------------------------------------------------
@@ -172,6 +210,7 @@ const server = http.createServer(async (req, res) => {
       const STATIC = {
         '/': ['index.html', 'text/html; charset=utf-8'],
         '/about': ['about.html', 'text/html; charset=utf-8'],
+        '/storage': ['storage.html', 'text/html; charset=utf-8'],
         '/privacy': ['privacy.html', 'text/html; charset=utf-8'],
         '/terms': ['terms.html', 'text/html; charset=utf-8'],
         '/logo.png': ['logo.png', 'image/png'],
@@ -226,6 +265,69 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/relay/hello' && req.method === 'POST') {
       const owner = pairOwner(req); if (!owner) return sendJson(res, 401, { error: 'bad pairing token' });
       markSeen(owner); return sendJson(res, 200, { ok: true, owner });
+    }
+
+    // ---- F3D Storage remote — desktop side (the paired Mac dials in here) ----
+    if (url.pathname === '/storage/relay/hello' && req.method === 'POST') {
+      const acc = await storageAuth(req);
+      if (!acc) return sendJson(res, 401, { error: 'sign in required' });
+      if (!acc.entitled) return sendJson(res, 402, { error: 'F3D Storage remote access needs the $3/mo plan', code: 'upgrade_required' });
+      markSeen(acc.owner); return sendJson(res, 200, { ok: true, owner: acc.email });
+    }
+    if (url.pathname === '/storage/relay/next' && req.method === 'GET') {
+      const acc = await storageAuth(req);
+      if (!acc) return sendJson(res, 401, { error: 'sign in required' });
+      if (!acc.entitled) return sendJson(res, 402, { error: 'upgrade required', code: 'upgrade_required' });
+      const call = await nextCall(acc.owner);
+      return call ? sendJson(res, 200, call) : sendJson(res, 204, {});
+    }
+    if (url.pathname === '/storage/relay/result' && req.method === 'POST') {
+      const acc = await storageAuth(req);
+      if (!acc) return sendJson(res, 401, { error: 'sign in required' });
+      const { callId, result } = JSON.parse((await readBody(req)) || '{}');
+      return sendJson(res, 200, { delivered: submitResult(acc.owner, callId, result) });
+    }
+
+    // ---- F3D Storage remote — client side (the web UI / another device) ----
+    if (url.pathname === '/storage/online' && req.method === 'GET') {
+      const acc = await storageAuth(req);
+      if (!acc) return sendJson(res, 401, { error: 'sign in required' });
+      if (!acc.entitled) return sendJson(res, 402, { error: 'F3D Storage needs the $3/mo plan', code: 'upgrade_required' });
+      return sendJson(res, 200, { online: isOnline(acc.owner) });
+    }
+    if (url.pathname === '/storage/list' && req.method === 'GET') {
+      const acc = await storageAuth(req);
+      if (!acc) return sendJson(res, 401, { error: 'sign in required' });
+      if (!acc.entitled) return sendJson(res, 402, { error: 'F3D Storage needs the $3/mo plan', code: 'upgrade_required' });
+      if (!isOnline(acc.owner)) return sendJson(res, 503, { error: 'Your Mac is not connected right now — open Forge3D and turn on Remote access.', code: 'desktop_offline' });
+      try { return sendJson(res, 200, await relayCall(acc.owner, 'storage_list', {}, 20000)); }
+      catch (e) { return sendJson(res, 504, { error: String(e?.message || e) }); }
+    }
+    if (url.pathname.startsWith('/storage/file/') && req.method === 'GET') {
+      const acc = await storageAuth(req);
+      if (!acc) return sendJson(res, 401, { error: 'sign in required' });
+      if (!acc.entitled) return sendJson(res, 402, { error: 'upgrade required', code: 'upgrade_required' });
+      if (!isOnline(acc.owner)) return sendJson(res, 503, { error: 'Your Mac is not connected right now.', code: 'desktop_offline' });
+      const name = decodeURIComponent(url.pathname.slice('/storage/file/'.length));
+      try {
+        const out = await relayCall(acc.owner, 'storage_get', { name }, 30000);
+        if (!out?.ok) return sendJson(res, 404, { error: out?.error || 'not found' });
+        const buf = Buffer.from(out.result.content_base64, 'base64');
+        res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${out.result.name.replace(/"/g, '')}"`, 'content-length': buf.length, ...CORS });
+        return res.end(buf);
+      } catch (e) { return sendJson(res, 504, { error: String(e?.message || e) }); }
+    }
+    if (url.pathname.startsWith('/storage/file/') && req.method === 'POST') {
+      const acc = await storageAuth(req);
+      if (!acc) return sendJson(res, 401, { error: 'sign in required' });
+      if (!acc.entitled) return sendJson(res, 402, { error: 'upgrade required', code: 'upgrade_required' });
+      if (!isOnline(acc.owner)) return sendJson(res, 503, { error: 'Your Mac is not connected right now.', code: 'desktop_offline' });
+      const name = decodeURIComponent(url.pathname.slice('/storage/file/'.length));
+      try {
+        const raw = await readBodyBuffer(req);
+        const out = await relayCall(acc.owner, 'storage_put', { name, content_base64: raw.toString('base64') }, 30000);
+        return sendJson(res, out?.ok ? 200 : 500, out);
+      } catch (e) { return sendJson(res, 504, { error: String(e?.message || e) }); }
     }
 
     // ---- MCP (Claude connects here) ----

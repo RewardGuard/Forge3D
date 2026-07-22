@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F3D Storage — remote access</title>
+<meta name="description" content="Reach your F3D Storage files on your own Mac from any device.">
+<style>
+  :root{ --bg:#0b0e13; --card:#11151c; --line:#222a36; --txt:#eef2f8; --muted:#9aa7ba; --steel:#c7d0dd; --lava:#ff5a1f; --lava2:#ff7a3c; --ok:#22c55e; --warn:#eab308; }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:radial-gradient(1200px 600px at 50% -10%, #161c26 0%, var(--bg) 60%);color:var(--txt);
+       font:16px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;min-height:100vh}
+  .wrap{max-width:560px;margin:0 auto;padding:48px 20px 60px}
+  .top{text-align:center;margin-bottom:28px}
+  img.logo{width:76px;height:76px;border-radius:18px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  h1{font-size:1.7rem;margin:.5rem 0 .1rem}
+  .tag{color:var(--muted);margin:0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-top:16px}
+  label{display:block;font-size:.82rem;color:var(--muted);margin:10px 0 4px}
+  input{width:100%;background:#0c1118;border:1px solid var(--line);color:var(--txt);border-radius:9px;padding:10px 12px;font-size:14px}
+  input:focus{outline:none;border-color:var(--lava)}
+  .btn{display:inline-flex;align-items:center;gap:.4rem;justify-content:center;background:linear-gradient(180deg,var(--lava2),var(--lava));
+       color:#fff;font-weight:700;border:none;text-decoration:none;padding:11px 18px;border-radius:10px;cursor:pointer;font-size:14px}
+  .btn.secondary{background:#1b2230;color:var(--txt)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn.full{width:100%;margin-top:12px}
+  .err{color:#f87171;font-size:.85rem;margin-top:8px}
+  .row{display:flex;align-items:center;gap:10px;justify-content:space-between}
+  .status{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .dot.on{background:var(--ok)}
+  .dot.off{background:#ef4444}
+  .file{display:flex;align-items:center;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--line);font-size:.92rem}
+  .file:last-child{border-bottom:none}
+  .file b{font-weight:600}
+  .file span{color:var(--muted);font-size:.8rem}
+  .file a{color:var(--lava2);text-decoration:none;font-size:.85rem}
+  .empty{color:var(--muted);font-size:.9rem;padding:14px 4px}
+  .signout{background:none;border:none;color:var(--muted);text-decoration:underline;cursor:pointer;font-size:.82rem}
+  footer{margin-top:30px;text-align:center;color:var(--muted);font-size:.82rem}
+  footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a href="/"><img class="logo" src="/logo.png" alt="Forge3D"></a>
+    <h1>F3D Storage</h1>
+    <p class="tag">Your files, on your own Mac, from anywhere.</p>
+  </div>
+
+  <div id="auth" class="card" style="display:none">
+    <div id="authTabs" class="row">
+      <button class="btn secondary" id="tabLogin" style="flex:1">Sign in</button>
+      <button class="btn secondary" id="tabSignup" style="flex:1">Create account</button>
+    </div>
+    <label>Email</label>
+    <input id="email" type="email" placeholder="you@example.com">
+    <label>Password</label>
+    <input id="password" type="password" placeholder="Your password">
+    <button class="btn full" id="go">Sign in →</button>
+    <p class="err" id="authErr"></p>
+  </div>
+
+  <div id="app" style="display:none">
+    <div class="card">
+      <div class="row">
+        <span class="status"><span class="dot" id="dot"></span> <span id="statusText">checking…</span></span>
+        <button class="signout" id="signout">Sign out</button>
+      </div>
+      <p class="err" id="offlineNote" style="display:none">Open Forge3D on your Mac and turn on <b>Remote access</b> (F3D Storage panel) to connect.</p>
+    </div>
+
+    <div class="card">
+      <div class="row"><b>Your files</b><button class="btn secondary" id="refresh">↻</button></div>
+      <div id="files"></div>
+      <input type="file" id="filePicker" style="display:none">
+      <button class="btn full" id="upload">＋ Upload a file</button>
+      <p class="err" id="fileErr"></p>
+    </div>
+  </div>
+
+  <footer><a href="/">← Forge3D</a> · <a href="/privacy">Privacy</a></footer>
+</div>
+
+<script>
+const API = location.origin + '/f3d-api'; // billing/accounts service (same domain, Caddy-routed)
+const ROOT = location.origin; // this cloud-mcp service (storage relay)
+let mode = 'login';
+const $ = (id) => document.getElementById(id);
+const token = () => localStorage.getItem('f3d-storage-token') || '';
+const setToken = (t) => t ? localStorage.setItem('f3d-storage-token', t) : localStorage.removeItem('f3d-storage-token');
+
+function fmtSize(b) {
+  if (b == null) return '';
+  if (b < 1024) return b + ' B';
+  if (b < 1024 ** 2) return (b / 1024).toFixed(0) + ' KB';
+  return (b / 1024 ** 2).toFixed(1) + ' MB';
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(ROOT + path, { ...opts, headers: { ...(opts.headers || {}), authorization: 'Bearer ' + token() } });
+  return res;
+}
+
+$('tabLogin').onclick = () => { mode = 'login'; $('go').textContent = 'Sign in →'; };
+$('tabSignup').onclick = () => { mode = 'signup'; $('go').textContent = 'Create account →'; };
+
+$('go').onclick = async () => {
+  $('authErr').textContent = '';
+  const email = $('email').value.trim(), password = $('password').value;
+  if (!email || !password) return;
+  try {
+    const res = await fetch(API + '/auth/' + mode, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const data = await res.json();
+    if (!res.ok) { $('authErr').textContent = data.error || 'Failed'; return; }
+    setToken(data.token);
+    boot();
+  } catch (e) { $('authErr').textContent = String(e); }
+};
+$('signout').onclick = () => { setToken(''); boot(); };
+
+async function refreshStatus() {
+  const res = await api('/storage/online');
+  if (res.status === 402) { $('statusText').textContent = 'F3D Storage needs the $3/mo plan'; $('dot').className = 'dot off'; $('offlineNote').style.display = 'none'; return false; }
+  if (!res.ok) { $('statusText').textContent = 'not signed in'; $('dot').className = 'dot off'; return false; }
+  const data = await res.json();
+  $('dot').className = 'dot ' + (data.online ? 'on' : 'off');
+  $('statusText').textContent = data.online ? 'your Mac is connected' : 'your Mac is offline';
+  $('offlineNote').style.display = data.online ? 'none' : 'block';
+  return data.online;
+}
+
+async function loadFiles() {
+  $('fileErr').textContent = '';
+  const res = await api('/storage/list');
+  const box = $('files');
+  if (!res.ok) { const d = await res.json().catch(() => ({})); box.innerHTML = ''; $('fileErr').textContent = d.error || ('Error ' + res.status); return; }
+  const data = await res.json();
+  const files = data?.result?.files || [];
+  if (!files.length) { box.innerHTML = '<div class="empty">No files yet.</div>'; return; }
+  box.innerHTML = files.map((f) => `
+    <div class="file">
+      <div><b>${f.name}</b><br><span>${fmtSize(f.size)}</span></div>
+      <a href="#" data-name="${f.name}" class="dl">Download</a>
+    </div>`).join('');
+  box.querySelectorAll('.dl').forEach((a) => a.onclick = (e) => {
+    e.preventDefault();
+    const name = a.getAttribute('data-name');
+    const a2 = document.createElement('a');
+    fetch(ROOT + '/storage/file/' + encodeURIComponent(name), { headers: { authorization: 'Bearer ' + token() } })
+      .then((r) => r.blob()).then((blob) => {
+        a2.href = URL.createObjectURL(blob); a2.download = name; a2.click();
+      });
+  });
+}
+
+$('refresh').onclick = async () => { await refreshStatus(); await loadFiles(); };
+$('upload').onclick = () => $('filePicker').click();
+$('filePicker').onchange = async () => {
+  const f = $('filePicker').files[0];
+  if (!f) return;
+  $('fileErr').textContent = 'Uploading…';
+  const buf = await f.arrayBuffer();
+  const res = await api('/storage/file/' + encodeURIComponent(f.name), { method: 'POST', body: buf });
+  const data = await res.json().catch(() => ({}));
+  $('fileErr').textContent = res.ok ? '' : (data.error || 'Upload failed');
+  if (res.ok) loadFiles();
+  $('filePicker').value = '';
+};
+
+async function boot() {
+  if (!token()) { $('auth').style.display = 'block'; $('app').style.display = 'none'; return; }
+  $('auth').style.display = 'none'; $('app').style.display = 'block';
+  const online = await refreshStatus();
+  await loadFiles();
+}
+boot();
+setInterval(() => { if (token()) refreshStatus(); }, 5000);
+</script>
+</body>
+</html>

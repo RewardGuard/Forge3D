@@ -72,6 +72,8 @@ const browserFallback = {
     add: async () => ({ ok: false }),
     list: async () => ({ files: [] }),
     reveal: async () => ({ ok: false }),
+    setRemoteEnabled: async () => ({ running: false, status: 'off (browser preview)' }),
+    remoteStatus: async () => ({ running: false, status: 'off (browser preview)' }),
   },
   usage: {
     get: async () => ([

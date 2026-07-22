@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld('forge', {
     add: () => ipcRenderer.invoke('storage:add'),
     list: () => ipcRenderer.invoke('storage:list'),
     reveal: (filePath) => ipcRenderer.invoke('storage:reveal', { filePath }),
+    setRemoteEnabled: (enabled) => ipcRenderer.invoke('storage:setRemoteEnabled', enabled),
+    remoteStatus: () => ipcRenderer.invoke('storage:remoteStatus'),
   },
   orchestra: {
     think: (payload) => ipcRenderer.invoke('orchestra:think', payload),

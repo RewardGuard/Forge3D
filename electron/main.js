@@ -1150,6 +1150,99 @@ ipcMain.handle('storage:reveal', (_e, { filePath } = {}) => {
   return { ok };
 });
 
+// ============================================================================
+// F3D Storage — REMOTE access. The files live ONLY on this Mac's disk (never on
+// our servers); this just lets the ALREADY-PAID user reach that same local folder
+// from another device by dialing OUT to forge3d.design (same outbound long-poll
+// pattern as the Claude cloud pairing below — no inbound port, no port-forwarding,
+// works behind any home router). Off by default; the user opts in per machine.
+// ============================================================================
+const CLOUD_ROOT = process.env.FORGE3D_CLOUD_ROOT || 'https://forge3d.design';
+const STORAGE_MAX_TRANSFER = 10 * 1024 * 1024; // 10MB per file over the remote relay
+
+function storageRawList() {
+  const { root, present } = storageRoot();
+  if (!fs.existsSync(root)) return { files: [], root, present };
+  const files = fs.readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isFile() && !e.name.startsWith('.'))
+    .map((e) => { const p = path.join(root, e.name); const st = fs.statSync(p); return { name: e.name, size: st.size, mtime: st.mtimeMs }; })
+    .sort((a, b) => b.mtime - a.mtime);
+  return { files, root, present };
+}
+// path.basename() strips any directory components (incl. "../..") so a remote
+// call can never escape the storage root, read, or overwrite an arbitrary file.
+function storageRawRead(name) {
+  const { root } = storageRoot();
+  const safe = path.basename(String(name || ''));
+  if (!safe) throw new Error('missing file name');
+  const p = path.join(root, safe);
+  if (!fs.existsSync(p) || !fs.statSync(p).isFile()) throw new Error('file not found');
+  const st = fs.statSync(p);
+  if (st.size > STORAGE_MAX_TRANSFER) throw new Error(`file too large for remote transfer (${(st.size / 1e6).toFixed(1)}MB > 10MB) — use Forge3D on this Mac for big files`);
+  return { name: safe, size: st.size, content_base64: fs.readFileSync(p).toString('base64') };
+}
+function storageRawWrite(name, base64) {
+  const { root } = storageRoot();
+  const safe = path.basename(String(name || ''));
+  if (!safe) throw new Error('missing file name');
+  const buf = Buffer.from(String(base64 || ''), 'base64');
+  if (buf.length > STORAGE_MAX_TRANSFER) throw new Error('file too large for remote transfer (10MB max)');
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, safe), buf);
+  return { name: safe, size: buf.length };
+}
+
+let storageRemote = { running: false, abort: false, status: 'off' };
+const storageRemoteStatus = () => ({ running: storageRemote.running, status: storageRemote.status });
+
+async function storagePairLoop() {
+  const cfg = readConfig();
+  const token = cfg.accountToken;
+  if (!token) { storageRemote.status = 'signed-out'; storageRemote.running = false; return; }
+  storageRemote.running = true; storageRemote.abort = false; storageRemote.status = 'connecting';
+  const authHeaders = { 'content-type': 'application/json', authorization: 'Bearer ' + token };
+  try {
+    const r = await fetch(CLOUD_ROOT + '/storage/relay/hello', { method: 'POST', headers: authHeaders, body: '{}' });
+    if (r.status === 402) { storageRemote.status = 'upgrade_required'; storageRemote.running = false; return; }
+    if (r.status === 401) { storageRemote.status = 'unauthorized'; storageRemote.running = false; return; }
+    storageRemote.status = r.ok ? 'online' : `error ${r.status}`;
+  } catch { storageRemote.status = 'unreachable'; }
+
+  while (!storageRemote.abort) {
+    let call = null;
+    try {
+      const r = await fetch(CLOUD_ROOT + '/storage/relay/next', { headers: { authorization: 'Bearer ' + token } });
+      if (r.status === 401) { storageRemote.status = 'unauthorized'; break; }
+      if (r.status === 402) { storageRemote.status = 'upgrade_required'; break; }
+      if (r.status === 204) { storageRemote.status = 'online'; continue; }
+      if (!r.ok) { storageRemote.status = `error ${r.status}`; await sleep(2000); continue; }
+      call = await r.json();
+    } catch { storageRemote.status = 'unreachable'; await sleep(2000); continue; }
+    storageRemote.status = 'online';
+    let result;
+    try {
+      if (call.name === 'storage_list') result = { ok: true, result: storageRawList() };
+      else if (call.name === 'storage_get') result = { ok: true, result: storageRawRead(call.args?.name) };
+      else if (call.name === 'storage_put') result = { ok: true, result: storageRawWrite(call.args?.name, call.args?.content_base64) };
+      else result = { ok: false, error: `unknown storage call "${call.name}"` };
+    } catch (e) { result = { ok: false, error: String(e?.message || e) }; }
+    try { await fetch(CLOUD_ROOT + '/storage/relay/result', { method: 'POST', headers: authHeaders, body: JSON.stringify({ callId: call.callId, result }) }); } catch { /* next poll retries */ }
+  }
+  storageRemote.running = false;
+  if (!['unauthorized', 'upgrade_required'].includes(storageRemote.status)) storageRemote.status = 'off';
+}
+function startStorageRemote() { if (!storageRemote.running) storagePairLoop(); return storageRemoteStatus(); }
+function stopStorageRemote() { storageRemote.abort = true; storageRemote.running = false; storageRemote.status = 'off'; return storageRemoteStatus(); }
+
+ipcMain.handle('storage:setRemoteEnabled', (_e, enabled) => {
+  const cfg = readConfig();
+  cfg.storageRemoteEnabled = Boolean(enabled);
+  writeConfig(cfg);
+  if (cfg.storageRemoteEnabled) startStorageRemote(); else stopStorageRemote();
+  return storageRemoteStatus();
+});
+ipcMain.handle('storage:remoteStatus', () => storageRemoteStatus());
+
 ipcMain.handle('projects:list', () => {
   const listDir = (dir, wantExt) => {
     if (!fs.existsSync(dir)) return [];
@@ -1307,6 +1400,7 @@ app.whenReady().then(() => {
   // Bring the control bridge up if the user left it enabled last session.
   if (readConfig().bridgeEnabled) startBridge();
   if (readConfig().cloudPairEnabled) startCloudPairing();
+  if (readConfig().storageRemoteEnabled) startStorageRemote();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

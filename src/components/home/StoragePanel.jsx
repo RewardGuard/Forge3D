@@ -16,6 +16,7 @@ export default function StoragePanel() {
   const [st, setSt] = useState(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [remote, setRemote] = useState(null); // { running, status } | null while loading
 
   const entitlement = me?.storage?.bytes || 500 * GB; // plan grant (default 500GB)
   const hasPlan = me?.storage?.plan && me.storage.plan !== 'none';
@@ -23,7 +24,25 @@ export default function StoragePanel() {
   async function refresh() {
     try { setSt(await window.forge.storage.status()); } catch (e) { setMsg(String(e?.message || e)); }
   }
-  useEffect(() => { refresh(); }, []);
+  async function refreshRemote() {
+    try { setRemote(await window.forge.storage.remoteStatus()); } catch { /* ignore */ }
+  }
+  useEffect(() => { refresh(); refreshRemote(); }, []);
+  // poll remote status while the panel is open — the connection can flip while idle
+  useEffect(() => {
+    const id = setInterval(refreshRemote, 4000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function toggleRemote() {
+    setBusy(true);
+    try {
+      const next = !(remote?.running);
+      const res = await window.forge.storage.setRemoteEnabled(next);
+      setRemote(res);
+    } catch (e) { setMsg(String(e?.message || e)); }
+    finally { setBusy(false); }
+  }
 
   async function addFiles() {
     setBusy(true);
@@ -79,6 +98,31 @@ export default function StoragePanel() {
         {!hasPlan && <button className="btn primary" onClick={upgrade}>Get F3D Storage</button>}
         <button className="btn" onClick={refresh}>Refresh</button>
       </div>
+
+      <div className="divider" />
+      <div className="hd-storage-head">
+        <b>Remote access</b>
+        {hasPlan ? (
+          <span className={'badge ' + (remote?.running ? 'orc-badge-done' : '')}>
+            {remote?.status === 'online' ? 'ONLINE' : remote?.running ? remote?.status?.toUpperCase() : 'OFF'}
+          </span>
+        ) : <span className="badge">included with the plan</span>}
+      </div>
+      {hasPlan ? (
+        <>
+          <p className="muted small">
+            Turns THIS Mac into your personal cloud server — reach these files from your phone or
+            any other device at <a href="https://forge3d.design/storage" onClick={(e) => { e.preventDefault(); window.forge.openExternal?.('https://forge3d.design/storage'); }}>forge3d.design/storage</a>.
+            Files never leave your disk — this only opens a secure, sign-in-only tunnel to it. 10MB max per file.
+          </p>
+          <button className="btn" disabled={busy} onClick={toggleRemote}>
+            {remote?.running ? 'Turn off remote access' : 'Turn on remote access'}
+          </button>
+        </>
+      ) : (
+        <p className="muted small">Upgrade to reach these files remotely from another device, from anywhere.</p>
+      )}
+
       {msg && <p className="onb-note">{msg}</p>}
     </section>
   );
