@@ -281,10 +281,10 @@ ipcMain.handle('account:me', async () => {
     return { hasAccount: true, error: String(e?.message || e) };
   }
 });
-ipcMain.handle('account:checkout', async () => {
+ipcMain.handle('account:checkout', async (_e, { promoCode } = {}) => {
   const cfg = readConfig();
   if (!cfg.accountToken) throw new Error('Sign in first.');
-  const { url } = await cloudApi('/billing/checkout', { method: 'POST', body: {}, token: cfg.accountToken });
+  const { url } = await cloudApi('/billing/checkout', { method: 'POST', body: { promoCode: promoCode || undefined }, token: cfg.accountToken });
   if (url) await shell.openExternal(url);
   return { opened: Boolean(url) };
 });

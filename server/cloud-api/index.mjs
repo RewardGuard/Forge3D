@@ -132,6 +132,17 @@ const STORAGE_BYTES = Number(process.env.STORAGE_BYTES) || 500 * 1024 ** 3; // 5
 const trialActive = (acct) => Boolean(acct?.trialStartedAt && Date.now() - acct.trialStartedAt < TRIAL_DAYS * 86400_000);
 const entitledOf = (acct) => acct?.plan === 'pro' || trialActive(acct); // pro OR live trial unlocks everything
 
+// Look up an active promotion code by the text the user typed (e.g. "LAUNCH90").
+// Returns its Stripe id, or null if it doesn't exist / isn't active. Read-only.
+async function lookupPromoCode(code) {
+  const clean = String(code || '').trim();
+  if (!clean) return null;
+  const q = new URLSearchParams({ code: clean, active: 'true', limit: '1' });
+  const res = await fetch(`https://api.stripe.com/v1/promotion_codes?${q}`, { headers: { authorization: `Bearer ${STRIPE_KEY}` } });
+  const data = await res.json().catch(() => ({}));
+  return data?.data?.[0]?.id || null;
+}
+
 async function stripe(pathname, params) {
   const body = new URLSearchParams();
   const flat = (obj, prefix = '') => {
@@ -339,7 +350,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && url.pathname === '/billing/checkout') {
       if (!billingConfigured()) return send(res, 503, { error: 'Billing is not configured on the server yet.' });
-      const session = await stripe('/v1/checkout/sessions', {
+      const params = {
         mode: 'subscription',
         'line_items[0][price]': STRIPE_PRICE,
         'line_items[0][quantity]': 1,
@@ -348,7 +359,18 @@ const server = http.createServer(async (req, res) => {
         'metadata[plan]': 'pro',
         success_url: `${PUBLIC_URL}/billing/done`,
         cancel_url: `${PUBLIC_URL}/billing/done`,
-      });
+      };
+      // A typed-in code pre-applies that exact discount; otherwise fall back to
+      // Stripe's own "Add promotion code" field on the hosted checkout page
+      // (the two are mutually exclusive on a single Checkout Session).
+      if (body.promoCode) {
+        const promoId = await lookupPromoCode(body.promoCode);
+        if (!promoId) return send(res, 400, { error: `"${body.promoCode}" isn't a valid or active discount code.` });
+        params['discounts[0][promotion_code]'] = promoId;
+      } else {
+        params.allow_promotion_codes = 'true';
+      }
+      const session = await stripe('/v1/checkout/sessions', params);
       return send(res, 200, { url: session.url });
     }
     if (req.method === 'POST' && url.pathname === '/billing/portal') {

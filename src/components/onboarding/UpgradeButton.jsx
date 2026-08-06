@@ -9,18 +9,20 @@ export default function UpgradeButton() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
+  const [promo, setPromo] = useState('');
 
   const isPro = me?.plan === 'pro';
   const trial = me?.trial?.active;
   const hasStorage = me?.storage?.plan && me.storage.plan !== 'none';
 
-  async function run(kind) {
+  async function run(kind, promoCode) {
     setBusy(kind);
     setMsg('');
     try {
       if (!me?.hasAccount && !me?.email) throw new Error('Create a free account first (top-left of the welcome screen) to subscribe.');
-      const fn = kind === 'pro' ? window.forge.account.checkout : window.forge.account.checkoutStorage;
-      const res = await fn();
+      const res = kind === 'pro'
+        ? await window.forge.account.checkout(promoCode ? { promoCode } : undefined)
+        : await window.forge.account.checkoutStorage();
       setMsg(res?.opened ? 'Checkout opened in your browser — finish there and come back.' : 'Billing is not configured yet.');
     } catch (e) {
       setMsg(String(e?.message || e));
@@ -67,6 +69,24 @@ export default function UpgradeButton() {
               ? <button className="btn" disabled={busy} onClick={manage}>Manage</button>
               : <button className="btn primary" disabled={busy === 'storage'} onClick={() => run('storage')}>{busy === 'storage' ? '…' : 'Add'}</button>}
           </div>
+
+          {!isPro && (
+            <>
+              <div className="divider" />
+              <label className="lbl">Discount code</label>
+              <div className="row">
+                <input
+                  className="onb-input" placeholder="e.g. LAUNCH90" value={promo}
+                  onChange={(e) => setPromo(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => e.key === 'Enter' && promo.trim() && run('pro', promo.trim())}
+                />
+                <button className="btn primary" disabled={busy === 'pro' || !promo.trim()} onClick={() => run('pro', promo.trim())}>
+                  {busy === 'pro' ? '…' : 'Apply'}
+                </button>
+              </div>
+              <p className="muted small" style={{ marginTop: 4 }}>Applies to F3D Cloud Pro at checkout.</p>
+            </>
+          )}
 
           {msg && <p className="onb-note">{msg}</p>}
         </div>

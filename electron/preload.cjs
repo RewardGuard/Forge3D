@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('forge', {
     login: (payload) => ipcRenderer.invoke('account:login', payload),
     logout: () => ipcRenderer.invoke('account:logout'),
     me: () => ipcRenderer.invoke('account:me'),
-    checkout: () => ipcRenderer.invoke('account:checkout'),
+    checkout: (opts) => ipcRenderer.invoke('account:checkout', opts),
     checkoutStorage: () => ipcRenderer.invoke('account:checkoutStorage'),
     portal: () => ipcRenderer.invoke('account:portal'),
     startTrial: () => ipcRenderer.invoke('account:startTrial'),
