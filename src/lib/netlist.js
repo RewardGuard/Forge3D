@@ -4,8 +4,15 @@ import { numberedNodeNames } from './labels.js';
 // Build a human-readable text netlist of the circuit. This is both shown to the
 // user (so they can see exactly what the agent sees) and sent to the AI agent
 // as context for debugging. Example wires render as:  n1.+ ──── n2.VIN
-export function buildNetlist(nodes, wires) {
-  if (!nodes || !nodes.length) return 'Empty circuit — no parts placed yet.';
+export function buildNetlist(nodesIn, wiresIn) {
+  // A corrupt project file (or an agent building the circuit by hand) can hold
+  // half-formed wires; dereferencing w.from.node used to throw and take the
+  // get_netlist tool / Circuit panel with it. Filter to well-formed entries.
+  const nodes = Array.isArray(nodesIn) ? nodesIn.filter((n) => n && n.id != null) : [];
+  const wires = (Array.isArray(wiresIn) ? wiresIn : []).filter(
+    (w) => w?.from?.node != null && w?.from?.pin != null && w?.to?.node != null && w?.to?.pin != null
+  );
+  if (!nodes.length) return 'Empty circuit — no parts placed yet.';
   const names = numberedNodeNames(nodes);
   const nameOf = (id) => names[id] || id;
 

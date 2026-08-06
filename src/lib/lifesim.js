@@ -81,10 +81,15 @@ function heatCapacity(mat, geom) {
 }
 
 function dist3(a, b) {
-  const dx = (a[0] ?? 0) - (b[0] ?? 0);
-  const dy = (a[1] ?? 0) - (b[1] ?? 0);
-  const dz = (a[2] ?? 0) - (b[2] ?? 0);
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const dx = (a?.[0] ?? 0) - (b?.[0] ?? 0);
+  const dy = (a?.[1] ?? 0) - (b?.[1] ?? 0);
+  const dz = (a?.[2] ?? 0) - (b?.[2] ?? 0);
+  const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  // A NaN coordinate (bad hazard position, corrupt project) used to make this
+  // return NaN — and since every NaN comparison is false, the "out of reach"
+  // test never fired, so NaN flowed into the heat weights and pinned the
+  // object's temperature at NaN forever. Infinity = simply out of range.
+  return Number.isFinite(d) ? d : Infinity;
 }
 
 // ---- state ------------------------------------------------------------------
@@ -140,10 +145,12 @@ function subStep(state, meshes, hazards, info, dt, drivenIds) {
     if (!hz.on) continue;
     const spec = HAZARDS[hz.type];
     if (!spec) continue;
+    // a non-finite intensity would poison `rate` the same way a NaN position did
+    const intensity = Number.isFinite(Number(hz.intensity)) ? Number(hz.intensity) : 1;
     emitters.push({
-      pos: hz.position || [0, 0, 0],
+      pos: Array.isArray(hz.position) ? hz.position : [0, 0, 0],
       temp: spec.tempC,
-      rate: spec.rate * (hz.intensity ?? 1),
+      rate: spec.rate * intensity,
       reach: spec.reach,
     });
   }

@@ -85,6 +85,26 @@ function addUsage(email, tokens) {
 }
 const limitOf = (acct) => (entitledOf(acct) ? PRO_TOKENS : FREE_TOKENS); // pro or trial → generous cap
 
+// ---- in-flight token reservations (quota integrity under concurrency) ----
+// A provider call takes seconds. Without reserving up-front, every request that
+// lands during that await reads the SAME stale usage and passes the cap check —
+// measured at 8x overage with 20 concurrent calls, i.e. a free account could
+// burn unlimited paid upstream tokens. We reserve the worst case before calling
+// and settle to the real number afterwards.
+const inflight = new Map(); // email -> reserved token estimate
+const reservedOf = (email) => inflight.get(email) || 0;
+function reserve(email, tokens) {
+  inflight.set(email, reservedOf(email) + Math.max(0, tokens));
+}
+function release(email, tokens) {
+  const left = reservedOf(email) - Math.max(0, tokens);
+  if (left > 0) inflight.set(email, left); else inflight.delete(email);
+}
+// worst case a single call can cost: the provider clamps max_tokens to 4000,
+// and the prompt itself is billed too, so estimate both sides.
+const worstCase = (body) =>
+  Math.min(Number(body?.maxTokens) || 2000, 4000) + estimate(body?.system) + estimate(body?.user);
+
 // ---- passwords (scrypt) + JWT (HS256, no deps) ----
 const b64u = (buf) => Buffer.from(buf).toString('base64url');
 function hashPassword(password) {
@@ -412,19 +432,29 @@ const server = http.createServer(async (req, res) => {
     // ---- metered chat ----
     if (req.method === 'POST' && url.pathname === '/v1/chat') {
       const a = db.accounts[email];
-      const used = usageOf(email), limit = limitOf(a);
+      const limit = limitOf(a);
+      // count in-flight reservations, so concurrent calls can't all read a stale
+      // usage number and sail past the cap together
+      const used = usageOf(email) + reservedOf(email);
       if (used >= limit) {
         return send(res, 402, {
           error: a.plan === 'pro'
             ? `You hit this month's fair-use cap (${limit.toLocaleString()} tokens). It resets on the 1st.`
             : `You used your ${FREE_TOKENS.toLocaleString()} free tokens this month. Upgrade to Pro ($${PRICE_USD}/month) for all F3D Cloud AIs, or add your own API key in Settings.`,
-          code: 'upgrade_required', used, limit,
+          code: 'upgrade_required', used: usageOf(email), limit,
         });
       }
       const p = pickProvider(body.provider);
       if (!p) return send(res, 503, { error: body.provider ? `Provider "${body.provider}" is not available on F3D Cloud.` : 'No cloud provider configured.' });
+      const hold = worstCase(body);
+      reserve(email, hold);
       const t0 = Date.now();
-      const { text, tokens } = await callProvider(p, { system: body.system, user: body.user, maxTokens: body.maxTokens });
+      let text, tokens;
+      try {
+        ({ text, tokens } = await callProvider(p, { system: body.system, user: body.user, maxTokens: body.maxTokens }));
+      } finally {
+        release(email, hold); // always released, even if the provider throws
+      }
       addUsage(email, tokens);
       console.log(`[chat] ${p.id} ${tokens}tok ${Date.now() - t0}ms plan=${a.plan}`);
       return send(res, 200, { text, provider: p.id, model: p.model, tokens, usage: { used: usageOf(email), limit } });

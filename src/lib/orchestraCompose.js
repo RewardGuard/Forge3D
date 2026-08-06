@@ -20,12 +20,19 @@ const U = SCENE_SCALE / 1000; // mm → scene units (≈0.012)
 // primitive's base size in geometryFactory.js. Exported so the action API can
 // offer precise per-axis mm sizing (add_primitive size_mm).
 export function shapeScale(shape, dims = {}, u = U) {
-  const w = (dims.w || 0) * u, h = (dims.h || 0) * u, d = (dims.d || 0) * u, r = (dims.r || 0) * u;
+  // Millimetres arrive straight from an LLM (add_primitive / cut_hole / move_mesh
+  // size_mm) or a generated spec, so negative and non-finite values are real
+  // inputs. A NEGATIVE scale flips a mesh inside-out in three.js — inverted
+  // normals, black render, and degenerate CSG cuts / physics colliders — so take
+  // the magnitude and treat anything non-finite as "unspecified".
+  const mm = (v) => { const n = Math.abs(Number(v)); return Number.isFinite(n) ? n : 0; };
+  const dd = dims || {};
+  const w = mm(dd.w) * u, h = mm(dd.h) * u, d = mm(dd.d) * u, r = mm(dd.r) * u;
   switch (shape) {
-    case 'cylinder': return [(r || w / 2) / 0.4, h || 1, (r || d / 2) / 0.4];
-    case 'pyramid': return [w / 1.2, h, d / 1.2];      // ConeGeometry(0.6,1,4)
-    case 'cone': return [w / 1.0, h, d / 1.0];          // ConeGeometry(0.5,1)
-    default: return [w || 0.1, h || 0.1, d || 0.1];     // box 1×1×1
+    case 'cylinder': return [(r || w / 2 || 0.05) / 0.4, h || 1, (r || d / 2 || 0.05) / 0.4];
+    case 'pyramid': return [(w || 0.12) / 1.2, h || 0.1, (d || 0.12) / 1.2];  // ConeGeometry(0.6,1,4)
+    case 'cone': return [w || 0.1, h || 0.1, d || 0.1];                        // ConeGeometry(0.5,1)
+    default: return [w || 0.1, h || 0.1, d || 0.1];                            // box 1×1×1
   }
 }
 

@@ -15,8 +15,9 @@
     "dist": "npm run icon && npm run build && electron-builder --mac dmg",
     "dist:signed": "npm run icon && npm run build && electron-builder --mac dmg --config.mac.notarize=true",
     "start": "cross-env NODE_ENV=development electron .",
-    "test": "node scripts/benchmark-sim.mjs && node scripts/acceptance-orchestra.mjs",
-    "test:acceptance": "node scripts/acceptance-orchestra.mjs"
+    "test": "node scripts/benchmark-sim.mjs && node scripts/acceptance-orchestra.mjs && node scripts/benchmark-full.mjs",
+    "test:acceptance": "node scripts/acceptance-orchestra.mjs",
+    "test:full": "node scripts/benchmark-full.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.0",

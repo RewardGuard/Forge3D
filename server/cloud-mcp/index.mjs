@@ -103,14 +103,22 @@ function pairOwner(req) {
 // ---------------------------------------------------------------------------
 const ACCOUNTS_API = process.env.FORGE3D_ACCOUNTS_API || 'http://127.0.0.1:8787';
 const meCache = new Map(); // token -> { at, data }
+const ME_TTL = 5000, ME_CACHE_MAX = 500;
 async function accountMe(token) {
   const cached = meCache.get(token);
-  if (cached && Date.now() - cached.at < 5000) return cached.data;
+  if (cached && Date.now() - cached.at < ME_TTL) return cached.data;
   let data = null;
   try {
     const r = await fetch(ACCOUNTS_API + '/me', { headers: { authorization: 'Bearer ' + token } });
     if (r.ok) data = await r.json();
   } catch { /* accounts API unreachable — treat as unauthenticated */ }
+  // Evict expired entries (and hard-cap the map): every distinct token used to
+  // add an entry that was never removed — an unbounded leak on a 1GB box.
+  if (meCache.size >= ME_CACHE_MAX) {
+    const now = Date.now();
+    for (const [k, v] of meCache) if (now - v.at >= ME_TTL) meCache.delete(k);
+    if (meCache.size >= ME_CACHE_MAX) meCache.clear(); // all fresh: safe to drop, it's only a cache
+  }
   meCache.set(token, { at: Date.now(), data });
   return data;
 }

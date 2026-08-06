@@ -106,8 +106,24 @@ class DSU {
 
 const key = (node, pin) => `${node}:${pin}`;
 
-export function simulate(nodes, wires, opts = {}) {
-  const { codeByNode = null, blinkPhase = true, inputs = {} } = opts;
+export function simulate(nodesIn, wiresIn, opts = {}) {
+  const { codeByNode = null, blinkPhase = true, inputs = {} } = opts || {};
+  // Defensive intake. A node can reference a partId this build no longer has
+  // (a project saved by an older version, or an MCP/agent call that invented an
+  // id) — dereferencing its .pins used to throw and take the whole Circuit tab
+  // and Life Sim down with it. Drop those nodes, and any wire touching them, but
+  // SAY SO in warnings rather than failing silently.
+  const allNodes = Array.isArray(nodesIn) ? nodesIn.filter((n) => n && n.id != null) : [];
+  const nodes = allNodes.filter((n) => PART_BY_ID[n.partId]);
+  const unknownNodes = allNodes.filter((n) => !PART_BY_ID[n.partId]);
+  const liveIds = new Set(nodes.map((n) => n.id));
+  const wires = (Array.isArray(wiresIn) ? wiresIn : []).filter(
+    (w) => w?.from?.node != null && w?.to?.node != null && liveIds.has(w.from.node) && liveIds.has(w.to.node)
+  );
+  const intakeWarnings = unknownNodes.length
+    ? [`${unknownNodes.length} part(s) use an unknown type (${[...new Set(unknownNodes.map((n) => n.partId))].join(', ')}) and were skipped.`]
+    : [];
+
   const dsu = new DSU();
   // register every pin
   for (const n of nodes) {
@@ -290,7 +306,7 @@ export function simulate(nodes, wires, opts = {}) {
     }
     if (!changed) break;
   }
-  const warnings = [];
+  const warnings = [...intakeWarnings];
   const components = [];
   let totalCurrent = 0;
   const displayNames = numberedNodeNames(nodes); // "DC Motor 6V #1", "#2"…

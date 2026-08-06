@@ -26,12 +26,23 @@ export function isOnline(owner) {
   return !!s && Date.now() - s.lastSeen < ONLINE_MS;
 }
 
+const MAX_QUEUE = 200; // hard cap so an offline desktop can't grow the queue forever
+
 // Cloud → desktop: queue a call and resolve when the desktop posts its result.
 export function relayCall(owner, name, args, timeoutMs = 120_000) {
   const s = sess(owner);
   const callId = crypto.randomUUID();
   return new Promise((resolve, reject) => {
-    const to = setTimeout(() => { s.pending.delete(callId); reject(new Error('paired desktop did not respond in time')); }, timeoutMs);
+    if (s.queue.length >= MAX_QUEUE) return reject(new Error('too many pending calls for this desktop — is it still connected?'));
+    const to = setTimeout(() => {
+      s.pending.delete(callId);
+      // ALSO drop it from the queue. Otherwise a timed-out call sits there
+      // forever: the queue grows unbounded while the desktop is away, and every
+      // stale command fires the moment it reconnects (minutes or hours late).
+      const i = s.queue.findIndex((c) => c.callId === callId);
+      if (i !== -1) s.queue.splice(i, 1);
+      reject(new Error('paired desktop did not respond in time'));
+    }, timeoutMs);
     s.pending.set(callId, { resolve, to });
     s.queue.push({ callId, name, args });
     if (s.waiter) { const w = s.waiter; s.waiter = null; w(); } // wake a held poll
