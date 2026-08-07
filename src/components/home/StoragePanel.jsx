@@ -8,9 +8,12 @@ const fmt = (b) => {
   return (b / GB).toFixed(b < 10 * GB ? 1 : 0) + ' GB';
 };
 
-// F3D Storage card: local-volume backed cloud space (the "F3D Storage" USB). Shows
-// a usage meter (used / entitlement), lets the user add files, and points at the
-// $3/mo plan. NEVER formats the drive — setup instructions are manual.
+// F3D Storage card. Two audiences share this panel:
+//   • CUSTOMERS see their own quota and files, hosted on the operator's drives.
+//   • the OPERATOR (whose Mac has the F3D_STORAGE USBs plugged in) additionally
+//     sees total capacity across drives, how many customers are stored, and the
+//     "plug in another USB" alert at 96 GB.
+// Forge3D NEVER formats a drive — the operator prepares each one manually.
 export default function StoragePanel() {
   const me = useStore((s) => s.me);
   const [st, setSt] = useState(null);
@@ -63,30 +66,56 @@ export default function StoragePanel() {
     } catch (e) { setMsg(String(e?.message || e)); }
   }
 
+  // This machine is the storage HOST when F3D_STORAGE drives are attached.
+  const isHost = Boolean(st?.volumes?.length);
   const used = st?.usedBytes || 0;
-  // the meter fills against the plan grant, but can never exceed the physical disk
-  const cap = Math.min(entitlement, st?.capacityBytes || entitlement) || entitlement;
+  // customers fill against their plan grant; the operator against real hardware
+  const cap = isHost ? (st.capacityBytes || 1) : (Math.min(entitlement, st?.capacityBytes || entitlement) || entitlement);
   const pct = Math.min(100, Math.round((used / cap) * 100));
+  const alertPct = isHost && st?.alertAtBytes ? Math.min(100, (st.alertAtBytes / cap) * 100) : null;
 
   return (
     <section className="hd-storage card">
       <div className="hd-storage-head">
         <h3>☁ F3D Storage</h3>
-        {hasPlan
-          ? <span className="badge orc-badge-done">ACTIVE · {fmt(entitlement)}</span>
-          : <span className="badge">$3/mo · 500GB</span>}
+        {isHost
+          ? <span className={'badge ' + (st.needsAnotherDrive ? '' : 'orc-badge-done')}>
+              HOST · {st.volumes.length} drive{st.volumes.length > 1 ? 's' : ''} · {st.customers} customer{st.customers === 1 ? '' : 's'}
+            </span>
+          : hasPlan
+            ? <span className="badge orc-badge-done">ACTIVE · {fmt(entitlement)}</span>
+            : <span className="badge">$3/mo · 500GB</span>}
       </div>
 
-      <div className="stor-meter"><div className="stor-fill" style={{ width: pct + '%' }} /></div>
-      <p className="muted small">{fmt(used)} used of {fmt(cap)} {st?.present ? '' : '(volume not connected)'}</p>
+      <div className="stor-meter">
+        <div className="stor-fill" style={{ width: pct + '%' }} />
+        {alertPct != null && <div className="stor-mark" style={{ left: alertPct + '%' }} title="Buy-another-drive alert at 96 GB" />}
+      </div>
+      <p className="muted small">
+        {fmt(used)} used of {fmt(cap)}
+        {isHost ? ` across ${st.volumes.map((v) => v.name).join(', ')}` : (st?.present ? '' : ' (hosted)')}
+      </p>
 
-      {!st?.present && (
+      {/* OPERATOR: capacity alert — time to plug in another USB */}
+      {isHost && st.needsAnotherDrive && (
+        <div className="stor-setup" style={{ borderColor: 'var(--danger)' }}>
+          <b>⚠ Drives are filling up — add another</b>
+          <p className="muted small">
+            You've passed {fmt(st.alertAtBytes)} across your drives. Plug in another USB and name it
+            exactly <code>F3D_STORAGE_2</code> (then <code>_3</code>, and so on). New uploads
+            automatically go to whichever drive has the most free space.
+          </p>
+        </div>
+      )}
+
+      {/* No drives attached: this Mac is not hosting */}
+      {!isHost && (
         <div className="stor-setup">
-          <b>Set up your F3D Storage volume</b>
+          <b>Host F3D Storage on this Mac</b>
           <ol className="muted small">
-            <li>Plug in the drive you want to dedicate.</li>
-            <li>In <b>Disk Utility</b>, erase it and name it exactly <code>F3D Storage</code>.</li>
-            <li>Reopen this panel — Forge3D detects <code>/Volumes/F3D Storage</code> automatically.</li>
+            <li>Plug in the USB drive you want to dedicate.</li>
+            <li>In <b>Disk Utility</b>, erase it and name it exactly <code>F3D_STORAGE</code>.</li>
+            <li>Reopen this panel — Forge3D finds <code>/Volumes/F3D_STORAGE</code> automatically.</li>
           </ol>
           <p className="muted small">Forge3D never formats a drive for you — you stay in control of your disks.</p>
         </div>
@@ -95,7 +124,7 @@ export default function StoragePanel() {
       <div className="row">
         <button className="btn" disabled={busy || !st?.present} onClick={addFiles}>{busy ? 'Copying…' : '＋ Add files'}</button>
         {st?.present && <button className="btn" onClick={() => window.forge.storage.reveal()}>Reveal in Finder</button>}
-        {!hasPlan && <button className="btn primary" onClick={upgrade}>Get F3D Storage</button>}
+        {!hasPlan && !isHost && <button className="btn primary" onClick={upgrade}>Get F3D Storage</button>}
         <button className="btn" onClick={refresh}>Refresh</button>
       </div>
 
@@ -108,19 +137,24 @@ export default function StoragePanel() {
           </span>
         ) : <span className="badge">included with the plan</span>}
       </div>
-      {hasPlan ? (
+      {isHost ? (
         <>
           <p className="muted small">
-            Turns THIS Mac into your personal cloud server — reach these files from your phone or
-            any other device at <a href="https://forge3d.design/storage" onClick={(e) => { e.preventDefault(); window.forge.openExternal?.('https://forge3d.design/storage'); }}>forge3d.design/storage</a>.
-            Files never leave your disk — this only opens a secure, sign-in-only tunnel to it. 10MB max per file.
+            Serve your customers' F3D Storage from this Mac. Their files land in isolated folders on
+            your drives; they reach them at <a href="https://forge3d.design/storage" onClick={(e) => { e.preventDefault(); window.forge.openExternal?.('https://forge3d.design/storage'); }}>forge3d.design/storage</a>.
+            Keep this Mac awake and online — when it's off, customers see "temporarily offline" and no data is lost.
           </p>
           <button className="btn" disabled={busy} onClick={toggleRemote}>
-            {remote?.running ? 'Turn off remote access' : 'Turn on remote access'}
+            {remote?.running ? 'Stop hosting' : 'Start hosting'}
           </button>
         </>
+      ) : hasPlan ? (
+        <p className="muted small">
+          Your files are hosted for you — reach them from any device at{' '}
+          <a href="https://forge3d.design/storage" onClick={(e) => { e.preventDefault(); window.forge.openExternal?.('https://forge3d.design/storage'); }}>forge3d.design/storage</a>. 10MB max per file.
+        </p>
       ) : (
-        <p className="muted small">Upgrade to reach these files remotely from another device, from anywhere.</p>
+        <p className="muted small">Upgrade to get hosted storage you can reach from any device, anywhere.</p>
       )}
 
       {msg && <p className="onb-note">{msg}</p>}

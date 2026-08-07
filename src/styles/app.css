@@ -783,7 +783,9 @@ select:hover { border-color: var(--hover-border); }
 .hd-plan p { margin: 2px 0 0; }
 
 /* storage meter */
-.stor-meter { height: 9px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 12px 0 6px; }
+.stor-meter { position: relative; height: 9px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 12px 0 6px; }
+/* the "buy another drive" threshold marker on the operator's capacity meter */
+.stor-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--danger); opacity: .85; }
 .stor-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .3s ease; }
 .stor-setup { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
 .stor-setup ol { margin: 6px 0 4px 16px; padding: 0; }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Notification } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -1094,28 +1094,94 @@ function dirSize(p) {
   return total;
 }
 
-// ---- F3D Storage: a dedicated local volume named "F3D Storage" (the USB), with
-// a graceful fallback to Documents/Forge3D/Storage when the drive isn't mounted.
-// Forge3D NEVER formats or renames a disk — the user prepares the volume manually.
-const STORAGE_VOLUME = '/Volumes/F3D Storage';
+// ============================================================================
+// F3D Storage — THIS MACHINE IS THE STORAGE PROVIDER.
+//
+// Customers pay for F3D Storage; their files land on the USB drive(s) plugged
+// into THIS Mac (named F3D_STORAGE, F3D_STORAGE_2, …), each in their own folder.
+// That's what they're paying for — hosted space on hardware they don't own.
+//
+// Forge3D NEVER formats or renames a disk; the operator prepares each USB.
+// ============================================================================
+const STORAGE_VOLUME_PREFIX = 'F3D_STORAGE';
+const ALERT_AT_BYTES = 96 * 1024 ** 3;  // warn the operator to buy another USB
+const RESERVE_BYTES = 256 * 1024 ** 2;  // never fill the last 256MB (fs headroom)
+
+// Every mounted F3D_STORAGE* volume, newest-capacity info included.
+function storageVolumes() {
+  let names = [];
+  try { names = fs.readdirSync('/Volumes'); } catch { /* no /Volumes */ }
+  const vols = [];
+  for (const n of names) {
+    if (!n.startsWith(STORAGE_VOLUME_PREFIX)) continue;
+    const root = path.join('/Volumes', n);
+    try {
+      if (!fs.statSync(root).isDirectory()) continue;
+      const s = fs.statfsSync(root);
+      vols.push({
+        name: n, root,
+        capacityBytes: s.blocks * s.bsize,
+        freeBytes: s.bavail * s.bsize,
+        usedBytes: (s.blocks - s.bavail) * s.bsize,
+      });
+    } catch { /* unreadable volume — skip */ }
+  }
+  return vols.sort((a, b) => a.name.localeCompare(b.name));
+}
+// The volume new uploads should go to: the one with the most free space.
+function pickVolume() {
+  const vols = storageVolumes();
+  if (!vols.length) return null;
+  return vols.reduce((best, v) => (v.freeBytes > best.freeBytes ? v : best), vols[0]);
+}
+// Fallback root when no USB is plugged in (so the app still works locally).
 function storageRoot() {
   const cfg = readConfig();
-  for (const c of [cfg.storageRoot, STORAGE_VOLUME].filter(Boolean)) {
-    try { if (fs.statSync(c).isDirectory()) return { root: c, present: true }; } catch { /* next */ }
+  if (cfg.storageRoot) {
+    try { if (fs.statSync(cfg.storageRoot).isDirectory()) return { root: cfg.storageRoot, present: true }; } catch { /* fall through */ }
   }
+  const v = pickVolume();
+  if (v) return { root: v.root, present: true };
   return { root: path.join(LIBRARY_ROOT(), 'Storage'), present: false };
 }
-ipcMain.handle('storage:status', () => {
+// One folder per paying customer, keyed by a hash of their email so the folder
+// name never leaks the address and can't contain path separators.
+function customerDir(email, { create = false } = {}) {
+  const id = crypto.createHash('sha256').update(String(email || '').trim().toLowerCase()).digest('hex').slice(0, 16);
+  const { root } = storageRoot();
+  const dir = path.join(root, 'customers', id);
+  if (create) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+// Aggregate view across every plugged-in F3D_STORAGE volume.
+function storageStatus() {
+  const vols = storageVolumes();
   const { root, present } = storageRoot();
-  let capacityBytes = 0, freeBytes = 0, usedBytes = 0;
-  try { if (fs.existsSync(root)) usedBytes = dirSize(root); } catch { /* ignore */ }
-  try {
-    const s = fs.statfsSync(present ? root : path.dirname(root));
-    capacityBytes = s.blocks * s.bsize;
-    freeBytes = s.bavail * s.bsize;
-  } catch { /* statfsSync unavailable */ }
-  return { root, present, capacityBytes, freeBytes, usedBytes };
-});
+  const totals = vols.reduce((a, v) => ({
+    capacityBytes: a.capacityBytes + v.capacityBytes,
+    freeBytes: a.freeBytes + v.freeBytes,
+    usedBytes: a.usedBytes + v.usedBytes,
+  }), { capacityBytes: 0, freeBytes: 0, usedBytes: 0 });
+  let customers = 0;
+  for (const v of vols) {
+    try { customers += fs.readdirSync(path.join(v.root, 'customers')).length; } catch { /* none yet */ }
+  }
+  // If nothing is plugged in, report the fallback folder so the UI still shows something.
+  if (!vols.length) {
+    let usedBytes = 0, capacityBytes = 0, freeBytes = 0;
+    try { if (fs.existsSync(root)) usedBytes = dirSize(root); } catch { /* ignore */ }
+    try { const s = fs.statfsSync(path.dirname(root)); capacityBytes = s.blocks * s.bsize; freeBytes = s.bavail * s.bsize; } catch { /* ignore */ }
+    return { root, present, volumes: [], customers: 0, capacityBytes, freeBytes, usedBytes, alertAtBytes: ALERT_AT_BYTES, needsAnotherDrive: false };
+  }
+  return {
+    root, present, volumes: vols, customers,
+    ...totals,
+    alertAtBytes: ALERT_AT_BYTES,
+    // true once the fullest drive crosses the threshold and there's no emptier one
+    needsAnotherDrive: totals.usedBytes >= ALERT_AT_BYTES,
+  };
+}
+ipcMain.handle('storage:status', () => storageStatus());
 ipcMain.handle('storage:add', async () => {
   const { root, present } = storageRoot();
   fs.mkdirSync(root, { recursive: true });
@@ -1160,36 +1226,72 @@ ipcMain.handle('storage:reveal', (_e, { filePath } = {}) => {
 const CLOUD_ROOT = process.env.FORGE3D_CLOUD_ROOT || 'https://forge3d.design';
 const STORAGE_MAX_TRANSFER = 10 * 1024 * 1024; // 10MB per file over the remote relay
 
-function storageRawList() {
-  const { root, present } = storageRoot();
-  if (!fs.existsSync(root)) return { files: [], root, present };
-  const files = fs.readdirSync(root, { withFileTypes: true })
+// Each call carries the CUSTOMER it belongs to (the server injects this from the
+// verified account token, so a customer can never name someone else's folder).
+// A missing email means "the operator's own files" — the local, pre-hosting mode.
+function dirFor(email) {
+  return email ? customerDir(email, { create: true }) : storageRoot().root;
+}
+function storageRawList(email) {
+  const dir = dirFor(email);
+  if (!fs.existsSync(dir)) return { files: [], present: storageRoot().present };
+  const files = fs.readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isFile() && !e.name.startsWith('.'))
-    .map((e) => { const p = path.join(root, e.name); const st = fs.statSync(p); return { name: e.name, size: st.size, mtime: st.mtimeMs }; })
+    .map((e) => { const p = path.join(dir, e.name); const st = fs.statSync(p); return { name: e.name, size: st.size, mtime: st.mtimeMs }; })
     .sort((a, b) => b.mtime - a.mtime);
-  return { files, root, present };
+  return { files, present: storageRoot().present };
 }
 // path.basename() strips any directory components (incl. "../..") so a remote
-// call can never escape the storage root, read, or overwrite an arbitrary file.
-function storageRawRead(name) {
-  const { root } = storageRoot();
+// call can never escape its own customer folder, read, or overwrite anything else.
+function storageRawRead(name, email) {
+  const dir = dirFor(email);
   const safe = path.basename(String(name || ''));
   if (!safe) throw new Error('missing file name');
-  const p = path.join(root, safe);
+  const p = path.join(dir, safe);
   if (!fs.existsSync(p) || !fs.statSync(p).isFile()) throw new Error('file not found');
   const st = fs.statSync(p);
-  if (st.size > STORAGE_MAX_TRANSFER) throw new Error(`file too large for remote transfer (${(st.size / 1e6).toFixed(1)}MB > 10MB) — use Forge3D on this Mac for big files`);
+  if (st.size > STORAGE_MAX_TRANSFER) throw new Error(`file too large for remote transfer (${(st.size / 1e6).toFixed(1)}MB > 10MB)`);
   return { name: safe, size: st.size, content_base64: fs.readFileSync(p).toString('base64') };
 }
-function storageRawWrite(name, base64) {
-  const { root } = storageRoot();
+function storageRawWrite(name, base64, email) {
+  const dir = dirFor(email);
   const safe = path.basename(String(name || ''));
   if (!safe) throw new Error('missing file name');
   const buf = Buffer.from(String(base64 || ''), 'base64');
   if (buf.length > STORAGE_MAX_TRANSFER) throw new Error('file too large for remote transfer (10MB max)');
-  fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(path.join(root, safe), buf);
+  // Quota is deliberately oversubscribed (Dropbox-style), but a write that the
+  // DISK physically can't take must fail before it starts — a half-written file
+  // is worse than a rejected one.
+  const vol = pickVolume();
+  if (vol && buf.length > vol.freeBytes - RESERVE_BYTES) {
+    throw new Error('F3D Storage is physically full — the operator has been alerted to add another drive. Your existing files are safe.');
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  // write to a temp file then rename, so an interrupted transfer never leaves a
+  // corrupt file under the real name
+  const tmp = path.join(dir, '.' + safe + '.part');
+  fs.writeFileSync(tmp, buf);
+  fs.renameSync(tmp, path.join(dir, safe));
+  maybeAlertCapacity();
   return { name: safe, size: buf.length };
+}
+
+// Tell the operator (once per threshold crossing) to plug in another USB.
+let lastCapacityAlert = 0;
+function maybeAlertCapacity() {
+  const st = storageStatus();
+  if (!st.needsAnotherDrive) return;
+  if (Date.now() - lastCapacityAlert < 3600_000) return; // at most hourly
+  lastCapacityAlert = Date.now();
+  const usedGB = (st.usedBytes / 1024 ** 3).toFixed(1);
+  console.warn(`[f3d-storage] ${usedGB}GB used — plug in another ${STORAGE_VOLUME_PREFIX}_N drive.`);
+  try {
+    mainWindow?.webContents.send('storage:capacity-alert', { usedBytes: st.usedBytes, capacityBytes: st.capacityBytes, customers: st.customers });
+    new Notification({
+      title: 'F3D Storage is filling up',
+      body: `${usedGB} GB used across your drives. Plug in another USB named ${STORAGE_VOLUME_PREFIX}_2 (or _3…) to keep serving customers.`,
+    }).show();
+  } catch { /* notifications unavailable */ }
 }
 
 let storageRemote = { running: false, abort: false, status: 'off' };
@@ -1221,9 +1323,14 @@ async function storagePairLoop() {
     storageRemote.status = 'online';
     let result;
     try {
-      if (call.name === 'storage_list') result = { ok: true, result: storageRawList() };
-      else if (call.name === 'storage_get') result = { ok: true, result: storageRawRead(call.args?.name) };
-      else if (call.name === 'storage_put') result = { ok: true, result: storageRawWrite(call.args?.name, call.args?.content_base64) };
+      // `customer` is injected by the server from the caller's verified account
+      // token — it is NOT client-supplied, so one customer can't reach another's
+      // folder by naming it.
+      const who = call.args?.customer;
+      if (call.name === 'storage_list') result = { ok: true, result: storageRawList(who) };
+      else if (call.name === 'storage_get') result = { ok: true, result: storageRawRead(call.args?.name, who) };
+      else if (call.name === 'storage_put') result = { ok: true, result: storageRawWrite(call.args?.name, call.args?.content_base64, who) };
+      else if (call.name === 'storage_capacity') result = { ok: true, result: storageStatus() };
       else result = { ok: false, error: `unknown storage call "${call.name}"` };
     } catch (e) { result = { ok: false, error: String(e?.message || e) }; }
     try { await fetch(CLOUD_ROOT + '/storage/relay/result', { method: 'POST', headers: authHeaders, body: JSON.stringify({ callId: call.callId, result }) }); } catch { /* next poll retries */ }

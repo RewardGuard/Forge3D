@@ -122,12 +122,26 @@ async function accountMe(token) {
   meCache.set(token, { at: Date.now(), data });
   return data;
 }
+// ONE storage host serves every customer: the operator's Mac with the
+// F3D_STORAGE USB drives attached. Customers don't host their own files (they'd
+// have nothing to pay for) — they get a folder on the host's drives. The host
+// authenticates with the operator's own account, identified by FORGE3D_STORAGE_HOST.
+const STORAGE_HOST_OWNER = 'storage:host';
+const HOST_EMAIL = (process.env.FORGE3D_STORAGE_HOST || '').trim().toLowerCase();
+
 async function storageAuth(req) {
   const tok = bearer(req);
   if (!tok) return null;
   const me = await accountMe(tok);
   if (!me?.email) return null;
-  return { email: me.email, owner: 'storage:' + me.email, entitled: Boolean(me.storage?.plan && me.storage.plan !== 'none') };
+  const email = String(me.email).toLowerCase();
+  return {
+    email,
+    isHost: Boolean(HOST_EMAIL) && email === HOST_EMAIL,
+    // every customer's traffic is relayed to the SAME host session
+    owner: STORAGE_HOST_OWNER,
+    entitled: Boolean(me.storage?.plan && me.storage.plan !== 'none'),
+  };
 }
 function readBodyBuffer(req, limit = 12 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
@@ -275,17 +289,18 @@ const server = http.createServer(async (req, res) => {
       markSeen(owner); return sendJson(res, 200, { ok: true, owner });
     }
 
-    // ---- F3D Storage remote — desktop side (the paired Mac dials in here) ----
+    // ---- F3D Storage — HOST side. Only the operator's machine (the one with the
+    // F3D_STORAGE drives) may register here and serve everyone's files. ----
     if (url.pathname === '/storage/relay/hello' && req.method === 'POST') {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
-      if (!acc.entitled) return sendJson(res, 402, { error: 'F3D Storage remote access needs the $3/mo plan', code: 'upgrade_required' });
-      markSeen(acc.owner); return sendJson(res, 200, { ok: true, owner: acc.email });
+      if (!acc.isHost) return sendJson(res, 403, { error: 'this account is not the F3D Storage host', code: 'not_host' });
+      markSeen(acc.owner); return sendJson(res, 200, { ok: true, host: acc.email });
     }
     if (url.pathname === '/storage/relay/next' && req.method === 'GET') {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
-      if (!acc.entitled) return sendJson(res, 402, { error: 'upgrade required', code: 'upgrade_required' });
+      if (!acc.isHost) return sendJson(res, 403, { error: 'not the storage host', code: 'not_host' });
       const call = await nextCall(acc.owner);
       return call ? sendJson(res, 200, call) : sendJson(res, 204, {});
     }
@@ -296,7 +311,11 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { delivered: submitResult(acc.owner, callId, result) });
     }
 
-    // ---- F3D Storage remote — client side (the web UI / another device) ----
+    // ---- F3D Storage — CUSTOMER side (their app, or the web UI on any device).
+    // Every request is relayed to the single host; `customer` is taken from the
+    // VERIFIED account token, never from the request body, so one customer can
+    // never address another's folder. ----
+    const HOST_DOWN = { error: 'F3D Storage is temporarily offline — the storage host is not connected. Your files are safe.', code: 'host_offline' };
     if (url.pathname === '/storage/online' && req.method === 'GET') {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
@@ -307,18 +326,18 @@ const server = http.createServer(async (req, res) => {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
       if (!acc.entitled) return sendJson(res, 402, { error: 'F3D Storage needs the $3/mo plan', code: 'upgrade_required' });
-      if (!isOnline(acc.owner)) return sendJson(res, 503, { error: 'Your Mac is not connected right now — open Forge3D and turn on Remote access.', code: 'desktop_offline' });
-      try { return sendJson(res, 200, await relayCall(acc.owner, 'storage_list', {}, 20000)); }
+      if (!isOnline(acc.owner)) return sendJson(res, 503, HOST_DOWN);
+      try { return sendJson(res, 200, await relayCall(acc.owner, 'storage_list', { customer: acc.email }, 20000)); }
       catch (e) { return sendJson(res, 504, { error: String(e?.message || e) }); }
     }
     if (url.pathname.startsWith('/storage/file/') && req.method === 'GET') {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
       if (!acc.entitled) return sendJson(res, 402, { error: 'upgrade required', code: 'upgrade_required' });
-      if (!isOnline(acc.owner)) return sendJson(res, 503, { error: 'Your Mac is not connected right now.', code: 'desktop_offline' });
+      if (!isOnline(acc.owner)) return sendJson(res, 503, HOST_DOWN);
       const name = decodeURIComponent(url.pathname.slice('/storage/file/'.length));
       try {
-        const out = await relayCall(acc.owner, 'storage_get', { name }, 30000);
+        const out = await relayCall(acc.owner, 'storage_get', { name, customer: acc.email }, 30000);
         if (!out?.ok) return sendJson(res, 404, { error: out?.error || 'not found' });
         const buf = Buffer.from(out.result.content_base64, 'base64');
         res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${out.result.name.replace(/"/g, '')}"`, 'content-length': buf.length, ...CORS });
@@ -329,13 +348,21 @@ const server = http.createServer(async (req, res) => {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
       if (!acc.entitled) return sendJson(res, 402, { error: 'upgrade required', code: 'upgrade_required' });
-      if (!isOnline(acc.owner)) return sendJson(res, 503, { error: 'Your Mac is not connected right now.', code: 'desktop_offline' });
+      if (!isOnline(acc.owner)) return sendJson(res, 503, HOST_DOWN);
       const name = decodeURIComponent(url.pathname.slice('/storage/file/'.length));
       try {
         const raw = await readBodyBuffer(req);
-        const out = await relayCall(acc.owner, 'storage_put', { name, content_base64: raw.toString('base64') }, 30000);
+        const out = await relayCall(acc.owner, 'storage_put', { name, content_base64: raw.toString('base64'), customer: acc.email }, 30000);
         return sendJson(res, out?.ok ? 200 : 500, out);
       } catch (e) { return sendJson(res, 504, { error: String(e?.message || e) }); }
+    }
+    // Operator-only: total capacity across the F3D_STORAGE drives.
+    if (url.pathname === '/storage/capacity' && req.method === 'GET') {
+      const acc = await storageAuth(req);
+      if (!acc?.isHost) return sendJson(res, 403, { error: 'operator only' });
+      if (!isOnline(acc.owner)) return sendJson(res, 503, HOST_DOWN);
+      try { return sendJson(res, 200, await relayCall(acc.owner, 'storage_capacity', {}, 20000)); }
+      catch (e) { return sendJson(res, 504, { error: String(e?.message || e) }); }
     }
 
     // ---- MCP (Claude connects here) ----
