@@ -132,14 +132,23 @@ export default function StoragePanel() {
           by itself whenever this Mac is signed in with a drive attached, so there
           is nothing to switch on. */}
       {isHost && (
-        <p className="muted small" style={{ marginTop: 8 }}>
-          <span className={'hd-dot ' + (remote?.status === 'hosting' ? 'on' : remote?.running ? 'wait' : 'off')} />
-          {remote?.status === 'hosting'
-            ? `Serving customers · keep this Mac awake and online`
-            : remote?.status === 'unreachable' ? 'Reconnecting to forge3d.design…'
-            : remote?.status === 'signed-out' ? 'Sign in to serve customers'
-            : 'Connecting…'}
-        </p>
+        <>
+          <p className="muted small" style={{ marginTop: 8 }}>
+            <span className={'hd-dot ' + (remote?.status === 'hosting' ? 'on' : remote?.running ? 'wait' : 'off')} />
+            {remote?.status === 'hosting'
+              ? 'Serving customers · reopens itself after a power cut'
+              : remote?.status === 'unreachable' ? 'Reconnecting to forge3d.design…'
+              : remote?.status === 'signed-out' ? 'Sign in to serve customers'
+              : 'Connecting…'}
+          </p>
+          {/* Two macOS settings the app can't flip for you, needed so an outage
+              recovers with nobody at the desk. */}
+          <p className="muted small" style={{ marginTop: 4, opacity: 0.75 }}>
+            For unattended recovery also set <b>System Settings → Energy → “Start up
+            automatically after a power failure”</b>, and keep this Mac's login session
+            unlocked (the signing key lives in the Keychain).
+          </p>
+        </>
       )}
 
       {msg && <p className="onb-note">{msg}</p>}

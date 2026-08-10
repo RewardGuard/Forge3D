@@ -1323,6 +1323,17 @@ function maybeAlertCapacity() {
 let storageRemote = { running: false, abort: false, status: 'off' };
 const storageRemoteStatus = () => ({ running: storageRemote.running, status: storageRemote.status });
 
+// Open at login — but ONLY on the machine the server confirms is the storage
+// host. A power cut otherwise leaves customers offline until someone walks over
+// and opens the app by hand. Never enabled on a customer's Mac.
+function setHostAutoLaunch(enabled) {
+  try {
+    if (app.getLoginItemSettings().openAtLogin === enabled) return; // don't churn the system setting
+    app.setLoginItemSettings({ openAtLogin: enabled });
+    console.error(`[f3d-storage] open-at-login ${enabled ? 'enabled (host machine)' : 'disabled'}`);
+  } catch { /* unsupported platform / sandboxed */ }
+}
+
 // ---------------------------------------------------------------------------
 // HOST IDENTITY — proves the request comes from THIS physical Mac.
 //
@@ -1383,12 +1394,18 @@ async function storagePairLoop() {
   async function register() {
     try {
       const r = await fetch(CLOUD_ROOT + '/storage/relay/hello', { method: 'POST', headers: authHeaders, body: JSON.stringify(hostProof()), signal: AbortSignal.timeout(15_000) });
-      if (r.status === 403) { storageRemote.status = 'not-host'; return 'stop'; }   // not this machine/account — stay quiet
+      // Not this machine/account: go quiet AND make sure we never auto-launch on
+      // a customer's Mac (they may have hosted before, or be testing).
+      if (r.status === 403) { storageRemote.status = 'not-host'; setHostAutoLaunch(false); return 'stop'; }
       if (r.status === 402) { storageRemote.status = 'upgrade_required'; return 'stop'; }
       if (r.status === 401) { storageRemote.status = 'unauthorized'; return 'stop'; }
       if (!r.ok) { storageRemote.status = `error ${r.status}`; return null; }
       session = (await r.json()).session || null;
       storageRemote.status = 'hosting';
+      // Confirmed by the server that THIS machine is the host → come back by
+      // itself after a power cut, instead of the service staying down until
+      // someone manually opens the app.
+      setHostAutoLaunch(true);
       return session;
     } catch { storageRemote.status = 'unreachable'; return null; }  // no network yet (e.g. just booted after a power cut) — retry
   }
