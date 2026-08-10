@@ -147,6 +147,23 @@ const PROOF_SKEW_MS = 5 * 60_000; // reject signatures older/newer than 5 minute
 let hostPin = null;
 try { hostPin = JSON.parse(fs.readFileSync(PIN_FILE, 'utf-8')); } catch { /* not pinned yet */ }
 
+// A verified /hello mints a short-lived session. /relay/next and /relay/result
+// require it — otherwise a stolen token could skip the machine proof entirely by
+// polling the relay directly, which would hand that attacker every customer call.
+const HOST_SESSION_MS = 10 * 60_000;
+let hostSession = null; // { id, exp }
+function newHostSession() {
+  hostSession = { id: crypto.randomUUID(), exp: Date.now() + HOST_SESSION_MS };
+  return hostSession.id;
+}
+function validHostSession(req) {
+  const id = req.headers['x-f3d-host-session'];
+  if (!hostSession || !id) return false;
+  if (Date.now() > hostSession.exp) { hostSession = null; return false; }
+  const a = Buffer.from(String(id)), b = Buffer.from(hostSession.id);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 // Returns { ok } or { ok:false, reason }. `proof` = { deviceId, ts, signature, publicKey }.
 function verifyHostProof(proof) {
   const { deviceId, ts, signature, publicKey } = proof || {};
@@ -345,18 +362,22 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 403, { error: `F3D Storage can only be hosted from the pinned machine (${proof.reason}).`, code: 'not_host_machine' });
       }
       markSeen(acc.owner);
-      return sendJson(res, 200, { ok: true, host: acc.email, firstPin: Boolean(proof.firstPin) });
+      return sendJson(res, 200, { ok: true, host: acc.email, firstPin: Boolean(proof.firstPin), session: newHostSession() });
     }
     if (url.pathname === '/storage/relay/next' && req.method === 'GET') {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
       if (!acc.isHost) return sendJson(res, 403, { error: 'not the storage host', code: 'not_host' });
+      // account alone is not enough here either — require the session minted by a
+      // machine-verified /hello, so a stolen token can't poll the relay directly
+      if (!validHostSession(req)) return sendJson(res, 403, { error: 're-register from the pinned host machine', code: 'host_session_required' });
       const call = await nextCall(acc.owner);
       return call ? sendJson(res, 200, call) : sendJson(res, 204, {});
     }
     if (url.pathname === '/storage/relay/result' && req.method === 'POST') {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
+      if (!acc.isHost || !validHostSession(req)) return sendJson(res, 403, { error: 'not the pinned host machine', code: 'host_session_required' });
       const { callId, result } = JSON.parse((await readBody(req)) || '{}');
       return sendJson(res, 200, { delivered: submitResult(acc.owner, callId, result) });
     }

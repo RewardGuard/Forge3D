@@ -180,7 +180,7 @@ async function cloudPairLoop() {
   while (!cloudPair.abort) {
     let call = null;
     try {
-      const r = await fetch(`${base}/relay/next?token=${encodeURIComponent(token)}`);
+      const r = await fetch(`${base}/relay/next?token=${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(35_000) });
       if (r.status === 401) { cloudPair.status = 'unauthorized'; break; }
       if (r.status === 204) { cloudPair.status = 'online'; continue; }
       if (!r.ok) { cloudPair.status = `error ${r.status}`; await sleep(2000); continue; }
@@ -325,19 +325,45 @@ ipcMain.handle('onboarding:set', (_e, patch = {}) => {
   return onboardingOf(cfg);
 });
 
-// ---- Device fingerprint + persistent trial "cookie" (anti-abuse) ----
-// A stable id derived from hardware: it recomputes identically even after the
-// app config is deleted, so wiping the account can't grant a fresh free trial.
+// ---- Device fingerprint (trial anti-abuse AND storage-host pinning) ----
+// This MUST stay identical across reboots, power cuts, WiFi changes and new IPs —
+// the storage host is pinned to it, so a fingerprint that drifts would lock the
+// operator out of their own service.
+//
+// The old "first non-internal MAC" approach was NOT stable: macOS randomises the
+// Wi-Fi MAC per network, and awdl0/llw0 can enumerate before en0/en1 after a
+// reboot — either would change the id. IOPlatformUUID is the machine's real
+// hardware identity and never changes.
+let _deviceIdCache = null;
 function deviceFingerprint() {
-  let mac = '';
-  for (const list of Object.values(os.networkInterfaces())) {
-    for (const ni of list || []) {
-      if (!ni.internal && ni.mac && ni.mac !== '00:00:00:00:00:00') { mac = ni.mac; break; }
-    }
-    if (mac) break;
+  if (_deviceIdCache) return _deviceIdCache;
+  let stable = '';
+  if (process.platform === 'darwin') {
+    try {
+      const out = execFileSync('ioreg', ['-d2', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf-8' });
+      stable = (out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/) || [])[1] || '';
+    } catch { /* fall back below */ }
   }
-  const raw = [mac, os.hostname(), os.platform(), os.arch(), os.cpus()[0]?.model || ''].join('|');
-  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32);
+  if (!stable) {
+    // Non-macOS / ioreg unavailable: use the most stable MAC we can find —
+    // skip Apple's virtual links and prefer a universally-administered address
+    // (the 2nd hex digit is even) over a randomised one.
+    const macs = [];
+    for (const [name, list] of Object.entries(os.networkInterfaces())) {
+      if (/^(awdl|llw|utun|bridge|vmnet|lo)/i.test(name)) continue;
+      for (const ni of list || []) {
+        if (!ni.internal && ni.mac && ni.mac !== '00:00:00:00:00:00') macs.push({ name, mac: ni.mac });
+      }
+    }
+    macs.sort((a, b) => {
+      const universal = (m) => (parseInt(m.mac.split(':')[0], 16) & 0x02) === 0 ? 0 : 1; // real burned-in first
+      return universal(a) - universal(b) || a.name.localeCompare(b.name);
+    });
+    stable = macs[0]?.mac || '';
+  }
+  const raw = [stable, os.platform(), os.arch(), os.cpus()[0]?.model || ''].join('|');
+  _deviceIdCache = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 32);
+  return _deviceIdCache;
 }
 // The local "cookie": written to userData AND (if mounted) the F3D Storage volume
 // so it survives a config wipe. The server ledger is the real guard; this is a hint.
@@ -1351,21 +1377,42 @@ async function storagePairLoop() {
   if (!token) { storageRemote.status = 'signed-out'; storageRemote.running = false; return; }
   storageRemote.running = true; storageRemote.abort = false; storageRemote.status = 'connecting';
   const authHeaders = { 'content-type': 'application/json', authorization: 'Bearer ' + token };
-  try {
-    // Prove we are the pinned host MACHINE, not merely someone holding the token.
-    const r = await fetch(CLOUD_ROOT + '/storage/relay/hello', { method: 'POST', headers: authHeaders, body: JSON.stringify(hostProof()) });
-    if (r.status === 403) { storageRemote.status = 'not-host'; storageRemote.running = false; return; } // not the operator — stay quiet
-    if (r.status === 402) { storageRemote.status = 'upgrade_required'; storageRemote.running = false; return; }
-    if (r.status === 401) { storageRemote.status = 'unauthorized'; storageRemote.running = false; return; }
-    storageRemote.status = r.ok ? 'hosting' : `error ${r.status}`;
-  } catch { storageRemote.status = 'unreachable'; }
+  // Register (or re-register) from this machine. Returns the session id the relay
+  // requires, or null if we should stop trying (wrong account / not the host).
+  let session = null;
+  async function register() {
+    try {
+      const r = await fetch(CLOUD_ROOT + '/storage/relay/hello', { method: 'POST', headers: authHeaders, body: JSON.stringify(hostProof()), signal: AbortSignal.timeout(15_000) });
+      if (r.status === 403) { storageRemote.status = 'not-host'; return 'stop'; }   // not this machine/account — stay quiet
+      if (r.status === 402) { storageRemote.status = 'upgrade_required'; return 'stop'; }
+      if (r.status === 401) { storageRemote.status = 'unauthorized'; return 'stop'; }
+      if (!r.ok) { storageRemote.status = `error ${r.status}`; return null; }
+      session = (await r.json()).session || null;
+      storageRemote.status = 'hosting';
+      return session;
+    } catch { storageRemote.status = 'unreachable'; return null; }  // no network yet (e.g. just booted after a power cut) — retry
+  }
+  if (await register() === 'stop') { storageRemote.running = false; return; }
 
   while (!storageRemote.abort) {
     let call = null;
     try {
-      const r = await fetch(CLOUD_ROOT + '/storage/relay/next', { headers: { authorization: 'Bearer ' + token } });
+      // The server holds a poll for 25s. Time out a little after that: when this
+      // Mac's IP changes (power cut, ISP reconnect) the old socket is dead but
+      // silent — without a deadline `fetch` can hang on it for minutes while
+      // customers see "offline". 35s means we notice and redial promptly.
+      if (!session) {                       // first boot, or the session expired
+        const got = await register();
+        if (got === 'stop') break;
+        if (!got) { await sleep(3000); continue; }
+      }
+      const r = await fetch(CLOUD_ROOT + '/storage/relay/next', {
+        headers: { authorization: 'Bearer ' + token, 'x-f3d-host-session': session },
+        signal: AbortSignal.timeout(35_000),
+      });
       if (r.status === 401) { storageRemote.status = 'unauthorized'; break; }
-      if (r.status === 403) { storageRemote.status = 'not-host'; break; }
+      // session expired (or the server restarted) → prove the machine again
+      if (r.status === 403) { session = null; storageRemote.status = 'connecting'; continue; }
       if (r.status === 402) { storageRemote.status = 'upgrade_required'; break; }
       if (r.status === 204) { storageRemote.status = 'hosting'; continue; }
       if (!r.ok) { storageRemote.status = `error ${r.status}`; await sleep(2000); continue; }
@@ -1384,7 +1431,7 @@ async function storagePairLoop() {
       else if (call.name === 'storage_capacity') result = { ok: true, result: storageStatus() };
       else result = { ok: false, error: `unknown storage call "${call.name}"` };
     } catch (e) { result = { ok: false, error: String(e?.message || e) }; }
-    try { await fetch(CLOUD_ROOT + '/storage/relay/result', { method: 'POST', headers: authHeaders, body: JSON.stringify({ callId: call.callId, result }) }); } catch { /* next poll retries */ }
+    try { await fetch(CLOUD_ROOT + '/storage/relay/result', { method: 'POST', headers: { ...authHeaders, 'x-f3d-host-session': session }, body: JSON.stringify({ callId: call.callId, result }) }); } catch { /* next poll retries */ }
   }
   storageRemote.running = false;
   if (!['unauthorized', 'upgrade_required'].includes(storageRemote.status)) storageRemote.status = 'off';

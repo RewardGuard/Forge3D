@@ -78,11 +78,15 @@ const auth = (t) => ({ authorization: 'Bearer ' + t });
 // ---- the fake HOST: the operator's Mac serving customer folders off the USB ----
 const custDir = (email) => path.join(usb, 'customers', crypto.createHash('sha256').update(email.toLowerCase()).digest('hex').slice(0, 16));
 async function hostLoop(token, stop) {
-  await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(token), 'content-type': 'application/json' }, body: JSON.stringify(realMac.proof()) }).catch(() => {});
+  let session = null;
+  try {
+    const r = await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(token), 'content-type': 'application/json' }, body: JSON.stringify(realMac.proof()) });
+    session = (await r.json()).session;
+  } catch { /* retried below */ }
   while (!stop.stop) {
     let call;
     try {
-      const r = await fetch(MCP_BASE + '/storage/relay/next', { headers: auth(token) });
+      const r = await fetch(MCP_BASE + '/storage/relay/next', { headers: { ...auth(token), 'x-f3d-host-session': session } });
       if (r.status === 204) continue;
       if (!r.ok) { await sleep(200); continue; }
       call = await r.json();
@@ -104,7 +108,7 @@ async function hostLoop(token, stop) {
         result = { ok: true, result: { name: safe(call.args.name) } };
       } else result = { ok: false, error: 'unknown' };
     } catch (e) { result = { ok: false, error: String(e?.message || e) }; }
-    await fetch(MCP_BASE + '/storage/relay/result', { method: 'POST', headers: { ...auth(token), 'content-type': 'application/json' }, body: JSON.stringify({ callId: call.callId, result }) }).catch(() => {});
+    await fetch(MCP_BASE + '/storage/relay/result', { method: 'POST', headers: { ...auth(token), 'content-type': 'application/json', 'x-f3d-host-session': session }, body: JSON.stringify({ callId: call.callId, result }) }).catch(() => {});
   }
 }
 
@@ -162,8 +166,22 @@ try {
   assert.equal(forgedRes.status, 403);
   ok('a forged signature under the real public key is refused');
 
-  assert.equal((await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(host.token), 'content-type': 'application/json' }, body: JSON.stringify(realMac.proof()) })).status, 200);
-  ok('the genuine Mac still registers normally afterwards');
+  // A stolen token must not be able to SKIP /hello and poll the relay directly —
+  // that would hand the attacker every customer's calls without any machine proof.
+  const skipHello = await fetch(MCP_BASE + '/storage/relay/next', { headers: auth(host.token) });
+  assert.equal(skipHello.status, 403, 'relay polling without a machine-verified session was allowed!');
+  assert.equal((await skipHello.json()).code, 'host_session_required');
+  ok('polling the relay WITHOUT a verified session → 403 host_session_required');
+
+  const reReg = await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(host.token), 'content-type': 'application/json' }, body: JSON.stringify(realMac.proof()) });
+  assert.equal(reReg.status, 200);
+  const sess = (await reReg.json()).session;
+  assert.ok(sess, 'no host session issued');
+  ok('the genuine Mac registers and receives a host session');
+
+  const wrongSess = await fetch(MCP_BASE + '/storage/relay/next', { headers: { ...auth(host.token), 'x-f3d-host-session': crypto.randomUUID() } });
+  assert.equal(wrongSess.status, 403);
+  ok('a guessed/forged session id is refused');
 
   console.log('\nHOSTED ROUND-TRIP');
   const stop = { stop: false };
