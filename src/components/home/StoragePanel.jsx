@@ -37,16 +37,6 @@ export default function StoragePanel() {
     return () => clearInterval(id);
   }, []);
 
-  async function toggleRemote() {
-    setBusy(true);
-    try {
-      const next = !(remote?.running);
-      const res = await window.forge.storage.setRemoteEnabled(next);
-      setRemote(res);
-    } catch (e) { setMsg(String(e?.message || e)); }
-    finally { setBusy(false); }
-  }
-
   async function addFiles() {
     setBusy(true);
     setMsg('');
@@ -128,33 +118,28 @@ export default function StoragePanel() {
         <button className="btn" onClick={refresh}>Refresh</button>
       </div>
 
-      <div className="divider" />
-      <div className="hd-storage-head">
-        <b>Remote access</b>
-        {hasPlan ? (
-          <span className={'badge ' + (remote?.running ? 'orc-badge-done' : '')}>
-            {remote?.status === 'online' ? 'ONLINE' : remote?.running ? remote?.status?.toUpperCase() : 'OFF'}
-          </span>
-        ) : <span className="badge">included with the plan</span>}
-      </div>
-      {isHost ? (
-        <>
-          <p className="muted small">
-            Serve your customers' F3D Storage from this Mac. Their files land in isolated folders on
-            your drives; they reach them at <a href="https://forge3d.design/storage" onClick={(e) => { e.preventDefault(); window.forge.openExternal?.('https://forge3d.design/storage'); }}>forge3d.design/storage</a>.
-            Keep this Mac awake and online — when it's off, customers see "temporarily offline" and no data is lost.
-          </p>
-          <button className="btn" disabled={busy} onClick={toggleRemote}>
-            {remote?.running ? 'Stop hosting' : 'Start hosting'}
-          </button>
-        </>
-      ) : hasPlan ? (
+      {/* Customers just get their space, like any cloud drive. Reachable from
+          any device — no setup, no toggles. */}
+      {!isHost && (
         <p className="muted small">
-          Your files are hosted for you — reach them from any device at{' '}
-          <a href="https://forge3d.design/storage" onClick={(e) => { e.preventDefault(); window.forge.openExternal?.('https://forge3d.design/storage'); }}>forge3d.design/storage</a>. 10MB max per file.
+          {hasPlan
+            ? <>Reach your files from any device at <a href="https://forge3d.design/storage" onClick={(e) => { e.preventDefault(); window.forge.openExternal?.('https://forge3d.design/storage'); }}>forge3d.design/storage</a>.</>
+            : 'Upgrade to get storage you can reach from any device, anywhere.'}
         </p>
-      ) : (
-        <p className="muted small">Upgrade to get hosted storage you can reach from any device, anywhere.</p>
+      )}
+
+      {/* OPERATOR ONLY: a quiet status line. Hosting is infrastructure — it runs
+          by itself whenever this Mac is signed in with a drive attached, so there
+          is nothing to switch on. */}
+      {isHost && (
+        <p className="muted small" style={{ marginTop: 8 }}>
+          <span className={'hd-dot ' + (remote?.status === 'hosting' ? 'on' : remote?.running ? 'wait' : 'off')} />
+          {remote?.status === 'hosting'
+            ? `Serving customers · keep this Mac awake and online`
+            : remote?.status === 'unreachable' ? 'Reconnecting to forge3d.design…'
+            : remote?.status === 'signed-out' ? 'Sign in to serve customers'
+            : 'Connecting…'}
+        </p>
       )}
 
       {msg && <p className="onb-note">{msg}</p>}

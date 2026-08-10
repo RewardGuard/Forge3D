@@ -1297,6 +1297,11 @@ function maybeAlertCapacity() {
 let storageRemote = { running: false, abort: false, status: 'off' };
 const storageRemoteStatus = () => ({ running: storageRemote.running, status: storageRemote.status });
 
+// Hosting is INFRASTRUCTURE, not a feature: it starts by itself on the operator's
+// machine and is invisible everywhere else — iCloud never asks you to "start
+// hosting" either. Any signed-in app with an F3D_STORAGE drive quietly offers
+// itself; the server answers 403 `not_host` to everyone except the configured
+// operator account, and those apps simply go silent.
 async function storagePairLoop() {
   const cfg = readConfig();
   const token = cfg.accountToken;
@@ -1305,9 +1310,10 @@ async function storagePairLoop() {
   const authHeaders = { 'content-type': 'application/json', authorization: 'Bearer ' + token };
   try {
     const r = await fetch(CLOUD_ROOT + '/storage/relay/hello', { method: 'POST', headers: authHeaders, body: '{}' });
+    if (r.status === 403) { storageRemote.status = 'not-host'; storageRemote.running = false; return; } // not the operator — stay quiet
     if (r.status === 402) { storageRemote.status = 'upgrade_required'; storageRemote.running = false; return; }
     if (r.status === 401) { storageRemote.status = 'unauthorized'; storageRemote.running = false; return; }
-    storageRemote.status = r.ok ? 'online' : `error ${r.status}`;
+    storageRemote.status = r.ok ? 'hosting' : `error ${r.status}`;
   } catch { storageRemote.status = 'unreachable'; }
 
   while (!storageRemote.abort) {
@@ -1315,12 +1321,13 @@ async function storagePairLoop() {
     try {
       const r = await fetch(CLOUD_ROOT + '/storage/relay/next', { headers: { authorization: 'Bearer ' + token } });
       if (r.status === 401) { storageRemote.status = 'unauthorized'; break; }
+      if (r.status === 403) { storageRemote.status = 'not-host'; break; }
       if (r.status === 402) { storageRemote.status = 'upgrade_required'; break; }
-      if (r.status === 204) { storageRemote.status = 'online'; continue; }
+      if (r.status === 204) { storageRemote.status = 'hosting'; continue; }
       if (!r.ok) { storageRemote.status = `error ${r.status}`; await sleep(2000); continue; }
       call = await r.json();
     } catch { storageRemote.status = 'unreachable'; await sleep(2000); continue; }
-    storageRemote.status = 'online';
+    storageRemote.status = 'hosting';
     let result;
     try {
       // `customer` is injected by the server from the caller's verified account
@@ -1507,7 +1514,10 @@ app.whenReady().then(() => {
   // Bring the control bridge up if the user left it enabled last session.
   if (readConfig().bridgeEnabled) startBridge();
   if (readConfig().cloudPairEnabled) startCloudPairing();
-  if (readConfig().storageRemoteEnabled) startStorageRemote();
+  // Storage hosting needs no opt-in: if this machine is signed in and has an
+  // F3D_STORAGE drive, it offers itself and the server accepts only the operator.
+  // Everyone else gets 403 and the loop exits silently — no UI, no toggle.
+  if (readConfig().accountToken && storageVolumes().length) startStorageRemote();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
