@@ -23,3 +23,6 @@ server/cloud-bundle/manifest.json
 # server runtime secrets/state — generated, must never be committed
 .jwt-secret
 server/**/data.json
+
+# server-side host machine pin (runtime state)
+host-pin.json

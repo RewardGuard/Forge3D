@@ -15,6 +15,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 
@@ -128,6 +129,48 @@ async function accountMe(token) {
 // authenticates with the operator's own account, identified by FORGE3D_STORAGE_HOST.
 const STORAGE_HOST_OWNER = 'storage:host';
 const HOST_EMAIL = (process.env.FORGE3D_STORAGE_HOST || '').trim().toLowerCase();
+
+// ---------------------------------------------------------------------------
+// HOST PINNING — the operator's account is necessary but NOT sufficient.
+//
+// The account token lives in a file on the operator's Mac, so a stolen copy
+// would otherwise let an attacker host from their own machine and receive every
+// customer's uploads. The first successful registration therefore PINS that
+// machine's Ed25519 public key + device fingerprint to disk; from then on the
+// server requires a fresh, valid signature from that exact key. Wrong machine,
+// wrong key, or a replayed old signature ⇒ 403, even with perfect credentials.
+// Re-pinning is deliberately a manual, physical act: delete host-pin.json on
+// the server (see PIN_FILE below).
+// ---------------------------------------------------------------------------
+const PIN_FILE = process.env.FORGE3D_HOST_PIN || path.join(path.dirname(fileURLToPath(import.meta.url)), 'host-pin.json');
+const PROOF_SKEW_MS = 5 * 60_000; // reject signatures older/newer than 5 minutes
+let hostPin = null;
+try { hostPin = JSON.parse(fs.readFileSync(PIN_FILE, 'utf-8')); } catch { /* not pinned yet */ }
+
+// Returns { ok } or { ok:false, reason }. `proof` = { deviceId, ts, signature, publicKey }.
+function verifyHostProof(proof) {
+  const { deviceId, ts, signature, publicKey } = proof || {};
+  if (!deviceId || !ts || !signature || !publicKey) return { ok: false, reason: 'missing device proof' };
+  if (Math.abs(Date.now() - Number(ts)) > PROOF_SKEW_MS) return { ok: false, reason: 'stale device proof' };
+  // the signature must be over THIS deviceId+timestamp, made by the presented key
+  let signatureOk = false;
+  try {
+    signatureOk = crypto.verify(null, Buffer.from(`${deviceId}.${ts}`), crypto.createPublicKey(publicKey), Buffer.from(signature, 'base64'));
+  } catch { return { ok: false, reason: 'malformed device key' }; }
+  if (!signatureOk) return { ok: false, reason: 'bad device signature' };
+
+  if (!hostPin) { // trust on first use, then immutable
+    hostPin = { deviceId, publicKey, pinnedAt: Date.now() };
+    try { fs.writeFileSync(PIN_FILE, JSON.stringify(hostPin, null, 2), { mode: 0o600 }); } catch { /* best effort */ }
+    console.error(`[f3d-storage] host machine PINNED (device ${deviceId.slice(0, 12)}…). Delete ${PIN_FILE} to re-pin.`);
+    return { ok: true, firstPin: true };
+  }
+  // constant-time compare of the pinned key, and an exact device match
+  const a = Buffer.from(hostPin.publicKey), b = Buffer.from(publicKey);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return { ok: false, reason: 'this is not the pinned host machine' };
+  if (hostPin.deviceId !== deviceId) return { ok: false, reason: 'device fingerprint changed' };
+  return { ok: true };
+}
 
 async function storageAuth(req) {
   const tok = bearer(req);
@@ -295,7 +338,14 @@ const server = http.createServer(async (req, res) => {
       const acc = await storageAuth(req);
       if (!acc) return sendJson(res, 401, { error: 'sign in required' });
       if (!acc.isHost) return sendJson(res, 403, { error: 'this account is not the F3D Storage host', code: 'not_host' });
-      markSeen(acc.owner); return sendJson(res, 200, { ok: true, host: acc.email });
+      // Right account is not enough — prove it's the pinned MACHINE.
+      const proof = verifyHostProof(JSON.parse((await readBody(req)) || '{}'));
+      if (!proof.ok) {
+        console.error(`[f3d-storage] host registration REFUSED: ${proof.reason}`);
+        return sendJson(res, 403, { error: `F3D Storage can only be hosted from the pinned machine (${proof.reason}).`, code: 'not_host_machine' });
+      }
+      markSeen(acc.owner);
+      return sendJson(res, 200, { ok: true, host: acc.email, firstPin: Boolean(proof.firstPin) });
     }
     if (url.pathname === '/storage/relay/next' && req.method === 'GET') {
       const acc = await storageAuth(req);

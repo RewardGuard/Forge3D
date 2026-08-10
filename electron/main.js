@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { measureSTL } from './stlMeasure.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1297,11 +1297,54 @@ function maybeAlertCapacity() {
 let storageRemote = { running: false, abort: false, status: 'off' };
 const storageRemoteStatus = () => ({ running: storageRemote.running, status: storageRemote.status });
 
+// ---------------------------------------------------------------------------
+// HOST IDENTITY — proves the request comes from THIS physical Mac.
+//
+// An account token alone is not enough: it sits in forge3d.config.json, so
+// copying that one file to another machine would let someone sign in as the
+// operator and take over hosting (customer uploads would then land on THEIR
+// disk). So the host also signs each registration with an Ed25519 key whose
+// PRIVATE half lives in the macOS Keychain — copying files off the disk doesn't
+// get it; you need an unlocked session on this Mac. The server pins the public
+// key the first time and refuses every other key afterwards.
+// ---------------------------------------------------------------------------
+const KEYCHAIN_SVC = 'forge3d-host-key';
+const KEYCHAIN_ACC = 'forge3d';
+function keychainGet() {
+  try {
+    return execFileSync('security', ['find-generic-password', '-a', KEYCHAIN_ACC, '-s', KEYCHAIN_SVC, '-w'], { encoding: 'utf-8' }).trim();
+  } catch { return null; }
+}
+function keychainSet(value) {
+  execFileSync('security', ['add-generic-password', '-a', KEYCHAIN_ACC, '-s', KEYCHAIN_SVC, '-w', value, '-U']);
+}
+// Load (or create once) this machine's host key. Returns { privateKey, publicKeyPem }.
+function hostKey() {
+  let pkcs8 = keychainGet();
+  if (!pkcs8) {
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    pkcs8 = privateKey.export({ type: 'pkcs8', format: 'pem' });
+    keychainSet(pkcs8);
+  }
+  const privateKey = crypto.createPrivateKey(pkcs8);
+  const publicKeyPem = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString();
+  return { privateKey, publicKeyPem };
+}
+// Sign a fresh timestamp so a captured registration can't be replayed later.
+function hostProof() {
+  const { privateKey, publicKeyPem } = hostKey();
+  const deviceId = deviceFingerprint();
+  const ts = Date.now();
+  const payload = `${deviceId}.${ts}`;
+  const signature = crypto.sign(null, Buffer.from(payload), privateKey).toString('base64');
+  return { deviceId, ts, signature, publicKey: publicKeyPem };
+}
+
 // Hosting is INFRASTRUCTURE, not a feature: it starts by itself on the operator's
 // machine and is invisible everywhere else — iCloud never asks you to "start
 // hosting" either. Any signed-in app with an F3D_STORAGE drive quietly offers
-// itself; the server answers 403 `not_host` to everyone except the configured
-// operator account, and those apps simply go silent.
+// itself; the server answers 403 `not_host` to everyone whose account, device
+// and signing key don't all match the pinned host, and those apps go silent.
 async function storagePairLoop() {
   const cfg = readConfig();
   const token = cfg.accountToken;
@@ -1309,7 +1352,8 @@ async function storagePairLoop() {
   storageRemote.running = true; storageRemote.abort = false; storageRemote.status = 'connecting';
   const authHeaders = { 'content-type': 'application/json', authorization: 'Bearer ' + token };
   try {
-    const r = await fetch(CLOUD_ROOT + '/storage/relay/hello', { method: 'POST', headers: authHeaders, body: '{}' });
+    // Prove we are the pinned host MACHINE, not merely someone holding the token.
+    const r = await fetch(CLOUD_ROOT + '/storage/relay/hello', { method: 'POST', headers: authHeaders, body: JSON.stringify(hostProof()) });
     if (r.status === 403) { storageRemote.status = 'not-host'; storageRemote.running = false; return; } // not the operator — stay quiet
     if (r.status === 402) { storageRemote.status = 'upgrade_required'; storageRemote.running = false; return; }
     if (r.status === 401) { storageRemote.status = 'unauthorized'; storageRemote.running = false; return; }

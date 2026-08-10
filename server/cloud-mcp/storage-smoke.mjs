@@ -21,6 +21,21 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
 
+// ---- host machine identity (mirrors electron/main.js hostProof) ----
+function makeMachine(deviceId) {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  return {
+    deviceId,
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    proof(ts = Date.now()) {
+      const sig = crypto.sign(null, Buffer.from(`${deviceId}.${ts}`), privateKey).toString('base64');
+      return { deviceId, ts, signature: sig, publicKey: this.publicKeyPem };
+    },
+  };
+}
+const realMac = makeMachine('device-real-operator-mac');
+const thiefMac = makeMachine('device-attacker-laptop');
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API_PORT = 8911, MCP_PORT = 8912;
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
@@ -63,7 +78,7 @@ const auth = (t) => ({ authorization: 'Bearer ' + t });
 // ---- the fake HOST: the operator's Mac serving customer folders off the USB ----
 const custDir = (email) => path.join(usb, 'customers', crypto.createHash('sha256').update(email.toLowerCase()).digest('hex').slice(0, 16));
 async function hostLoop(token, stop) {
-  await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(token), 'content-type': 'application/json' }, body: '{}' }).catch(() => {});
+  await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(token), 'content-type': 'application/json' }, body: JSON.stringify(realMac.proof()) }).catch(() => {});
   while (!stop.stop) {
     let call;
     try {
@@ -102,9 +117,10 @@ try {
   const custB = await signup('bob@customer.test');
   ok('operator + two customer accounts created');
 
-  const notHost = await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: auth(custA.token), body: '{}' });
+  const notHost = await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: auth(custA.token), body: JSON.stringify(thiefMac.proof()) });
   assert.equal(notHost.status, 403);
   ok('a customer CANNOT register as the storage host (403)');
+
 
   console.log('\nPAYWALL');
   assert.equal((await fetch(MCP_BASE + '/storage/list', { headers: auth(custA.token) })).status, 402);
@@ -120,6 +136,34 @@ try {
   assert.equal(off.status, 503);
   assert.equal((await off.json()).code, 'host_offline');
   ok('paid customer + host offline → 503 host_offline (non-destructive message)');
+
+  console.log('\nMACHINE PINNING — a stolen account token must NOT be enough');
+  // the operator's real Mac registers first and gets pinned
+  const first = await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(host.token), 'content-type': 'application/json' }, body: JSON.stringify(realMac.proof()) });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).firstPin, true);
+  ok('the operator\'s Mac registers and is PINNED on first use');
+
+  // THE ATTACK: someone copied forge3d.config.json and holds a perfectly valid
+  // operator token, but runs on a different machine with a different key.
+  const stolen = await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(host.token), 'content-type': 'application/json' }, body: JSON.stringify(thiefMac.proof()) });
+  assert.equal(stolen.status, 403, 'a stolen token on another machine was allowed to host!');
+  assert.equal((await stolen.json()).code, 'not_host_machine');
+  ok('STOLEN OPERATOR TOKEN on another machine → 403 not_host_machine');
+
+  // it can't replay the real Mac's captured signature later
+  const replay = await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(host.token), 'content-type': 'application/json' }, body: JSON.stringify(realMac.proof(Date.now() - 30 * 60_000)) });
+  assert.equal(replay.status, 403);
+  ok('a captured 30-min-old signature is refused (replay blocked)');
+
+  // nor forge one under the real public key
+  const forged = { ...realMac.proof(), signature: Buffer.from('not-a-real-signature').toString('base64') };
+  const forgedRes = await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(host.token), 'content-type': 'application/json' }, body: JSON.stringify(forged) });
+  assert.equal(forgedRes.status, 403);
+  ok('a forged signature under the real public key is refused');
+
+  assert.equal((await fetch(MCP_BASE + '/storage/relay/hello', { method: 'POST', headers: { ...auth(host.token), 'content-type': 'application/json' }, body: JSON.stringify(realMac.proof()) })).status, 200);
+  ok('the genuine Mac still registers normally afterwards');
 
   console.log('\nHOSTED ROUND-TRIP');
   const stop = { stop: false };
