@@ -21,9 +21,10 @@ export default function UpgradeButton() {
     setMsg('');
     try {
       if (!me?.hasAccount && !me?.email) throw new Error('Create a free account first (top-left of the welcome screen) to subscribe.');
+      const args = promoCode ? { promoCode } : undefined;
       const res = kind === 'pro'
-        ? await window.forge.account.checkout(promoCode ? { promoCode } : undefined)
-        : await window.forge.account.checkoutStorage();
+        ? await window.forge.account.checkout(args)
+        : await window.forge.account.checkoutStorage(args);
       setMsg(res?.opened ? 'Checkout opened in your browser — finish there and come back.' : 'Billing is not configured yet.');
     } catch (e) {
       setMsg(String(e?.message || e));
@@ -51,6 +52,24 @@ export default function UpgradeButton() {
         <div className="hd-pop">
           {trial && <p className="onb-note">Your free trial is active until {new Date(me.trial.endsAt).toLocaleDateString()}. Add a plan to keep the perks after it ends.</p>}
 
+          {/* The code (if typed) is carried into whichever plan you buy — it used
+              to be wired to Pro only, and the field disappeared entirely once you
+              were Pro, so it could never be spent on Storage. */}
+          {(!isPro || !hasStorage) && (
+            <>
+              <label className="lbl">Discount code (optional)</label>
+              <input
+                className="onb-input" placeholder="e.g. LAUNCH90" value={promo}
+                onChange={(e) => setPromo(e.target.value.toUpperCase())}
+              />
+              <p className="muted small" style={{ margin: '4px 0 10px' }}>
+                {promo.trim()
+                  ? <>Will be applied to whichever plan you pick below.</>
+                  : <>Leave empty to pay full price — you can also enter a code on the Stripe page.</>}
+              </p>
+            </>
+          )}
+
           <div className="hd-plan">
             <div>
               <b>F3D Cloud Pro</b> <span className="muted small">$5/month</span>
@@ -58,7 +77,7 @@ export default function UpgradeButton() {
             </div>
             {isPro
               ? <button className="btn" disabled={busy} onClick={manage}>Manage</button>
-              : <button className="btn primary" disabled={busy === 'pro'} onClick={() => run('pro')}>{busy === 'pro' ? '…' : 'Upgrade'}</button>}
+              : <button className="btn primary" disabled={busy === 'pro'} onClick={() => run('pro', promo.trim())}>{busy === 'pro' ? '…' : 'Upgrade'}</button>}
           </div>
 
           <div className="hd-plan">
@@ -68,26 +87,8 @@ export default function UpgradeButton() {
             </div>
             {hasStorage
               ? <button className="btn" disabled={busy} onClick={manage}>Manage</button>
-              : <button className="btn primary" disabled={busy === 'storage'} onClick={() => run('storage')}>{busy === 'storage' ? '…' : 'Add'}</button>}
+              : <button className="btn primary" disabled={busy === 'storage'} onClick={() => run('storage', promo.trim())}>{busy === 'storage' ? '…' : 'Add'}</button>}
           </div>
-
-          {!isPro && (
-            <>
-              <div className="divider" />
-              <label className="lbl">Discount code</label>
-              <div className="row">
-                <input
-                  className="onb-input" placeholder="e.g. LAUNCH90" value={promo}
-                  onChange={(e) => setPromo(e.target.value.toUpperCase())}
-                  onKeyDown={(e) => e.key === 'Enter' && promo.trim() && run('pro', promo.trim())}
-                />
-                <button className="btn primary" disabled={busy === 'pro' || !promo.trim()} onClick={() => run('pro', promo.trim())}>
-                  {busy === 'pro' ? '…' : 'Apply'}
-                </button>
-              </div>
-              <p className="muted small" style={{ marginTop: 4 }}>Applies to F3D Cloud Pro at checkout.</p>
-            </>
-          )}
 
           {msg && <p className="onb-note">{msg}</p>}
         </div>

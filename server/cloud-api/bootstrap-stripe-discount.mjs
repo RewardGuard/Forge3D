@@ -1,10 +1,18 @@
 // One-time Stripe setup for the LAUNCH90 discount code — idempotent. Run ON THE
 // SERVER with STRIPE_SECRET_KEY in the environment (or .env next to this file):
 //   node bootstrap-stripe-discount.mjs
-// Finds-or-creates a Coupon (90% off, repeating for 6 months, restricted to the
-// F3D Cloud Pro product only) and a Promotion Code "LAUNCH90" that redeems it.
-// Unlimited redemptions, no expiration (product decision). Never prints the
-// secret key. Requires STRIPE_PRICE_ID already set (run bootstrap-stripe.mjs first).
+//
+// Creates a Coupon (90% off, repeating for 6 months, NO product restriction so it
+// works on both F3D Cloud Pro and F3D Storage) and a Promotion Code "LAUNCH90".
+// Unlimited redemptions, no expiration.
+//
+// NOTE: a coupon's `applies_to` is IMMUTABLE in Stripe. The first version of this
+// script restricted the coupon to the Pro product, which made the code unusable
+// on Storage ("This coupon cannot be redeemed because it does not apply to
+// anything in this order"). Since it can't be edited, this script deactivates any
+// existing LAUNCH90 promotion code and issues a fresh one on an unrestricted
+// coupon — Stripe only requires the code string to be unique among ACTIVE codes.
+// Existing subscriptions keep the discount they were created with.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,10 +28,8 @@ try {
 
 const KEY = process.env.STRIPE_SECRET_KEY;
 if (!KEY) { console.error('STRIPE_SECRET_KEY missing'); process.exit(1); }
-const PRO_PRICE_ID = process.env.STRIPE_PRICE_ID;
-if (!PRO_PRICE_ID) { console.error('STRIPE_PRICE_ID missing (run bootstrap-stripe.mjs first)'); process.exit(1); }
 
-const COUPON_ID = 'launch90-pro-6mo';
+const COUPON_ID = 'launch90-all-6mo';   // unrestricted: Pro AND Storage
 const CODE = 'LAUNCH90';
 
 async function stripe(method, pathname, params) {
@@ -40,12 +46,7 @@ async function stripe(method, pathname, params) {
   return data;
 }
 
-// resolve the Pro product from its price, so the coupon can be restricted to it
-const proPrice = await stripe('GET', `/v1/prices/${PRO_PRICE_ID}`);
-const proProduct = proPrice.product;
-console.log('Pro product:', proProduct);
-
-// coupon: 90% off, repeats for 6 billing cycles, ONLY valid against the Pro product
+// 1. the unrestricted coupon
 let coupon;
 try {
   coupon = await stripe('GET', `/v1/coupons/${COUPON_ID}`);
@@ -57,19 +58,31 @@ try {
     percent_off: 90,
     duration: 'repeating',
     duration_in_months: 6,
-    'applies_to[products][0]': proProduct,
+    // deliberately NO applies_to → valid on every product
   });
-  console.log('created coupon', coupon.id);
+  console.log('created coupon', coupon.id, '(no product restriction)');
 }
 
-// promotion code: the human-typable "LAUNCH90" — unlimited redemptions, no expiry
-const existing = await stripe('GET', `/v1/promotion_codes?code=${CODE}&limit=1`);
-let promo = existing.data[0];
+// 2. free the code string: deactivate any active LAUNCH90 on another coupon
+const existing = await stripe('GET', `/v1/promotion_codes?code=${CODE}&limit=10`);
+let promo = null;
+for (const p of existing.data || []) {
+  if (p.coupon?.id === COUPON_ID && p.active) { promo = p; continue; }
+  if (p.active) {
+    await stripe('POST', `/v1/promotion_codes/${p.id}`, { active: false });
+    console.log('deactivated old promotion code', p.id, `(coupon ${p.coupon?.id} — restricted)`);
+  }
+}
+
+// 3. the code itself
 if (!promo) {
   promo = await stripe('POST', '/v1/promotion_codes', { coupon: coupon.id, code: CODE });
   console.log('created promotion code', promo.id, promo.code);
 } else {
-  console.log('promotion code exists', promo.id, promo.code, promo.active ? '(active)' : '(INACTIVE — reactivate in the Stripe dashboard)');
+  console.log('promotion code already on the unrestricted coupon', promo.id);
 }
 
-console.log(`\nDone. "${CODE}" gives 90% off F3D Cloud Pro for 6 months, unlimited uses, no expiry.`);
+// 4. prove it covers both products
+const verify = await stripe('GET', `/v1/coupons/${COUPON_ID}?expand[]=applies_to`);
+console.log(`\n"${CODE}": ${verify.percent_off}% off, ${verify.duration} ${verify.duration_in_months} months`);
+console.log('applies_to:', verify.applies_to ? JSON.stringify(verify.applies_to) : 'ALL PRODUCTS (Pro + Storage) ✓');

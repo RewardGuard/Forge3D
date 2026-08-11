@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('forge', {
     logout: () => ipcRenderer.invoke('account:logout'),
     me: () => ipcRenderer.invoke('account:me'),
     checkout: (opts) => ipcRenderer.invoke('account:checkout', opts),
-    checkoutStorage: () => ipcRenderer.invoke('account:checkoutStorage'),
+    checkoutStorage: (opts) => ipcRenderer.invoke('account:checkoutStorage', opts),
     portal: () => ipcRenderer.invoke('account:portal'),
     startTrial: () => ipcRenderer.invoke('account:startTrial'),
     setCloudAi: (ai) => ipcRenderer.invoke('config:setCloudAi', ai),

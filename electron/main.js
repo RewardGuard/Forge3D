@@ -296,10 +296,10 @@ ipcMain.handle('account:portal', async () => {
   return { opened: Boolean(url) };
 });
 // F3D Storage subscription ($3/mo · 500GB) — separate Stripe price from Pro.
-ipcMain.handle('account:checkoutStorage', async () => {
+ipcMain.handle('account:checkoutStorage', async (_e, { promoCode } = {}) => {
   const cfg = readConfig();
   if (!cfg.accountToken) throw new Error('Sign in first.');
-  const { url } = await cloudApi('/billing/checkout-storage', { method: 'POST', body: {}, token: cfg.accountToken });
+  const { url } = await cloudApi('/billing/checkout-storage', { method: 'POST', body: { promoCode: promoCode || undefined }, token: cfg.accountToken });
   if (url) await shell.openExternal(url);
   return { opened: Boolean(url) };
 });
