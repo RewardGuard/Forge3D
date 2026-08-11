@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Forge3D — operator guide</title>
+<meta name="description" content="Running the F3D Storage host: drives, capacity, power cuts and recovery.">
+<style>
+  :root{ --bg:#0b0e13; --card:#11151c; --line:#222a36; --txt:#eef2f8; --muted:#9aa7ba; --steel:#c7d0dd; --lava:#ff5a1f; --lava2:#ff7a3c; --ok:#22c55e; --warn:#eab308; }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:radial-gradient(1200px 600px at 50% -10%, #161c26 0%, var(--bg) 60%);color:var(--txt);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;min-height:100vh}
+  .wrap{max-width:760px;margin:0 auto;padding:48px 22px 70px}
+  .top{text-align:center;margin-bottom:8px}
+  img.logo{width:72px;height:72px;border-radius:16px}
+  h1{font-size:1.9rem;margin:.6rem 0 .2rem}
+  .tag{color:var(--muted);margin:0 0 6px}
+  .note{background:#1a1410;border:1px solid #4a3520;border-radius:10px;padding:10px 14px;color:var(--steel);font-size:.9rem;margin:18px 0}
+  h2{font-size:1.2rem;margin:34px 0 8px;padding-top:14px;border-top:1px solid var(--line)}
+  h3{font-size:1rem;margin:18px 0 4px}
+  p,li{color:var(--steel)}
+  .muted{color:var(--muted)}
+  code{background:#0c1118;border:1px solid var(--line);border-radius:6px;padding:2px 7px;font-size:.86rem;color:var(--steel)}
+  pre{background:#0c1118;border:1px solid var(--line);border-radius:9px;padding:12px 14px;overflow:auto;font-size:.84rem}
+  ol,ul{padding-left:22px} li{margin:5px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px 20px;margin:14px 0}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:.92rem}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:.85rem}
+  a{color:var(--lava2)}
+  footer{margin-top:44px;text-align:center;color:var(--muted);font-size:.85rem}
+  footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a href="/"><img class="logo" src="/logo.png" alt="Forge3D"></a>
+    <h1>Operator guide</h1>
+    <p class="tag">Running the F3D Storage host.</p>
+  </div>
+
+  <div class="note">
+    This page is for whoever runs the storage host. Customers never need any of it —
+    for them F3D Storage is just space that works.
+  </div>
+
+  <h2>How it fits together</h2>
+  <p>
+    One machine — the host — has the storage drives attached and serves every customer's files
+    from them. It dials <b>out</b> to forge3d.design and holds the connection open, so it works
+    behind any router with no port forwarding and no fixed IP.
+  </p>
+  <p>
+    Each customer gets their own folder, named after a hash of their email, so the folder name
+    never reveals who they are and one customer can never reach another's files.
+  </p>
+
+  <h2>Drives</h2>
+  <h3>Preparing one</h3>
+  <ol>
+    <li>Plug in the drive you want to dedicate.</li>
+    <li>Open <b>Disk Utility</b>, erase it, and name it exactly <code>F3D_STORAGE</code>.</li>
+    <li>That's it — the app picks it up automatically. It never formats a drive for you.</li>
+  </ol>
+
+  <h3>Adding more space</h3>
+  <p>
+    Name each additional drive <code>F3D_STORAGE_2</code>, then <code>_3</code>, and so on.
+    New uploads always go to whichever drive has the most free space, so you can add capacity
+    without moving anything that's already stored.
+  </p>
+
+  <h3>When to add one</h3>
+  <p>
+    At <b>96&nbsp;GB used</b> the host raises a macOS notification. That threshold leaves room to
+    order and plug in the next drive before anything is tight. Uploads keep working past it —
+    the only hard stop is the drive physically running out, and a write that wouldn't fit is
+    refused up front rather than leaving a half-written file.
+  </p>
+
+  <h2>Surviving power cuts</h2>
+  <p>The host reconnects on its own, but two macOS settings decide whether it comes back
+     <i>unattended</i>:</p>
+  <table>
+    <tr><th>Setting</th><th>Why</th></tr>
+    <tr>
+      <td><b>System Settings → Energy →</b><br>"Start up automatically after a power failure"</td>
+      <td>Otherwise the Mac simply stays off and the service is down until someone presses the power button.</td>
+    </tr>
+    <tr>
+      <td>Keep the login session <b>unlocked</b></td>
+      <td>The host's signing key lives in the Keychain, which needs an unlocked session. This is exactly what makes the key uncopyable — the tradeoff is that a locked Mac can't host.</td>
+    </tr>
+  </table>
+  <p class="muted">The app itself reopens at login automatically once it has confirmed it's the host.</p>
+
+  <h2>Security model</h2>
+  <p>Hosting requires all three at once — any one alone is useless:</p>
+  <ul>
+    <li>the operator account,</li>
+    <li>the <b>pinned machine</b> (fixed on first connection),</li>
+    <li>a fresh signature from a key that lives in that Mac's Keychain.</li>
+  </ul>
+  <p>
+    So a copied account token on another computer is refused, an old captured signature can't be
+    replayed, and a forged one fails. To move hosting to a different machine you delete
+    <code>host-pin.json</code> on the server — a deliberate, physical act.
+  </p>
+
+  <h2>Handy commands</h2>
+  <div class="card">
+    <p class="muted">Which drives are visible right now:</p>
+    <pre>ls -1 /Volumes | grep F3D_STORAGE</pre>
+    <p class="muted">Space used and free per drive:</p>
+    <pre>df -h /Volumes/F3D_STORAGE*</pre>
+    <p class="muted">How many customers are stored:</p>
+    <pre>ls -1 /Volumes/F3D_STORAGE/customers 2>/dev/null | wc -l</pre>
+  </div>
+
+  <h2>If something looks wrong</h2>
+  <table>
+    <tr><th>Symptom</th><th>What it means</th></tr>
+    <tr><td>Panel doesn't show <b>HOST</b></td><td>No drive named <code>F3D_STORAGE</code> is mounted. Reconnect it.</td></tr>
+    <tr><td>"Reconnecting…" for a while</td><td>Network is down or the IP just changed. It redials on its own within about half a minute.</td></tr>
+    <tr><td>Customers see "temporarily offline"</td><td>The host Mac is off, asleep, or locked. No data is lost — files are still on the drives.</td></tr>
+    <tr><td>Host refuses to register</td><td>Machine or key doesn't match the pin. Expected on a new Mac; delete <code>host-pin.json</code> on the server to re-pin.</td></tr>
+  </table>
+
+  <footer>
+    <a href="/">← Forge3D</a> · <a href="/about">About</a> · <a href="/storage">F3D Storage</a> ·
+    <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a>
+  </footer>
+</div>
+</body>
+</html>

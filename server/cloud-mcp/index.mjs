@@ -292,6 +292,7 @@ const server = http.createServer(async (req, res) => {
       const STATIC = {
         '/': ['index.html', 'text/html; charset=utf-8'],
         '/about': ['about.html', 'text/html; charset=utf-8'],
+        '/guide': ['guide.html', 'text/html; charset=utf-8'],
         '/storage': ['storage.html', 'text/html; charset=utf-8'],
         '/privacy': ['privacy.html', 'text/html; charset=utf-8'],
         '/terms': ['terms.html', 'text/html; charset=utf-8'],

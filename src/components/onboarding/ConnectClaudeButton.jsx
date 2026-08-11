@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStore } from '../../lib/store.js';
+import { usePopover } from '../../lib/usePopover.js';
 
 // Corner "Connect to Claude" button. Leads with the EASIEST path — the one-click
 // online connector from forge3d.design (Claude designs via the hosted server, no
@@ -11,7 +12,7 @@ export default function ConnectClaudeButton() {
   const bridgePort = useStore((s) => s.bridgePort);
   const setBridgeEnabled = useStore((s) => s.setBridgeEnabled);
 
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, ref } = usePopover();
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   async function toggleBridge() {
@@ -25,14 +26,14 @@ export default function ConnectClaudeButton() {
   }
 
   return (
-    <div className="hd-connect">
+    <div className="hd-connect" ref={ref}>
       <button className={'btn' + (bridgeRunning ? ' primary' : '')} onClick={() => setOpen((o) => !o)}>
         <span className={'hd-dot ' + (bridgeRunning ? 'on' : 'off')} />
         {bridgeRunning ? 'Connected (live app)' : 'Connect to Claude'}
       </button>
 
       {open && (
-        <div className="hd-pop" onMouseLeave={() => setOpen(false)}>
+        <div className="hd-pop">
           {/* EASIEST — the online one-click connector */}
           <div className="hd-pop-row"><b>Connect to Claude Desktop</b><span className="prov-tag free">EASIEST</span></div>
           <p className="muted small">

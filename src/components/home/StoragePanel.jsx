@@ -48,7 +48,8 @@ export default function StoragePanel() {
   // they are buying space on someone else's hardware, exactly like any cloud
   // drive. Their view is: how much space you have, and where to reach it.
   const isHost = Boolean(st?.volumes?.length);
-  const openWeb = (e) => { e.preventDefault(); window.forge.openExternal?.('https://forge3d.design/storage'); };
+  const openWeb = (e) => { e?.preventDefault?.(); window.forge.openExternal?.('https://forge3d.design/storage'); };
+  const openGuide = (e) => { e?.preventDefault?.(); window.forge.openExternal?.('https://forge3d.design/guide'); };
 
   // ---------------- OPERATOR (this Mac serves the customers) ----------------
   if (isHost) {
@@ -71,33 +72,27 @@ export default function StoragePanel() {
         </div>
         <p className="muted small">{fmt(used)} used of {fmt(cap)} across {st.volumes.map((v) => v.name).join(', ')}</p>
 
+        {/* Status only. Every how-to (preparing drives, adding one, power-cut
+            settings) lives in the operator guide on the site — the panel is not
+            a manual. */}
         {st.needsAnotherDrive && (
-          <div className="stor-setup" style={{ borderColor: 'var(--danger)' }}>
-            <b>⚠ Drives are filling up — add another</b>
-            <p className="muted small">
-              You've passed {fmt(st.alertAtBytes)}. Plug in another USB named <code>F3D_STORAGE_2</code>
-              (then <code>_3</code>…). New uploads go to whichever drive has the most free space.
-            </p>
-          </div>
+          <p className="onb-note" style={{ color: 'var(--danger)' }}>
+            ⚠ Running low on space — <a href="https://forge3d.design/guide" onClick={openGuide}>see the guide</a>
+          </p>
         )}
-
-        <div className="row">
-          <button className="btn" onClick={() => window.forge.storage.reveal()}>Reveal in Finder</button>
-          <button className="btn" onClick={refresh}>Refresh</button>
-        </div>
 
         <p className="muted small" style={{ marginTop: 8 }}>
           <span className={'hd-dot ' + (remote?.status === 'hosting' ? 'on' : remote?.running ? 'wait' : 'off')} />
-          {remote?.status === 'hosting' ? 'Serving customers · reopens itself after a power cut'
-            : remote?.status === 'unreachable' ? 'Reconnecting to forge3d.design…'
+          {remote?.status === 'hosting' ? 'Serving customers'
+            : remote?.status === 'unreachable' ? 'Reconnecting…'
             : remote?.status === 'signed-out' ? 'Sign in to serve customers'
             : 'Connecting…'}
         </p>
-        <p className="muted small" style={{ marginTop: 4, opacity: 0.75 }}>
-          For unattended recovery also set <b>System Settings → Energy → “Start up automatically
-          after a power failure”</b>, and keep this Mac's login session unlocked (the signing key
-          lives in the Keychain).
-        </p>
+
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn" onClick={refresh}>Refresh</button>
+          <button className="btn" onClick={openGuide}>Operator guide →</button>
+        </div>
         {msg && <p className="onb-note">{msg}</p>}
       </section>
     );

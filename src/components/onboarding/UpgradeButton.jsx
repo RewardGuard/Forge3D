@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { useStore } from '../../lib/store.js';
+import { usePopover } from '../../lib/usePopover.js';
 
 // Corner "Upgrade" button: opens a small plan popover offering F3D Cloud Pro
 // ($5/mo — all cloud AIs) and F3D Storage ($3/mo — 500GB). Both route through
 // the existing Stripe checkout in Electron main / the cloud-api server.
 export default function UpgradeButton() {
   const me = useStore((s) => s.me);
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, ref } = usePopover();
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
   const [promo, setPromo] = useState('');
@@ -41,13 +42,13 @@ export default function UpgradeButton() {
   }
 
   return (
-    <div className="hd-connect">
+    <div className="hd-connect" ref={ref}>
       <button className={'btn' + (isPro || trial ? '' : ' primary')} onClick={() => setOpen((o) => !o)}>
         {isPro ? '✦ Pro' : trial ? '✦ Trial active' : '✦ Upgrade'}
       </button>
 
       {open && (
-        <div className="hd-pop" onMouseLeave={() => setOpen(false)}>
+        <div className="hd-pop">
           {trial && <p className="onb-note">Your free trial is active until {new Date(me.trial.endsAt).toLocaleDateString()}. Add a plan to keep the perks after it ends.</p>}
 
           <div className="hd-plan">
