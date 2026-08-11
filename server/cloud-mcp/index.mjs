@@ -296,6 +296,12 @@ const server = http.createServer(async (req, res) => {
         '/privacy': ['privacy.html', 'text/html; charset=utf-8'],
         '/terms': ['terms.html', 'text/html; charset=utf-8'],
         '/logo.png': ['logo.png', 'image/png'],
+        // Favicons: small F3 marks (a few KB) — logo.png is 1.2MB and would be
+        // re-fetched on every page view if used as the icon.
+        '/favicon.ico': ['favicon.ico', 'image/x-icon'],
+        '/favicon-16.png': ['favicon-16.png', 'image/png'],
+        '/favicon-32.png': ['favicon-32.png', 'image/png'],
+        '/apple-touch-icon.png': ['favicon-180.png', 'image/png'],
         '/install.sh': ['install.sh', 'text/x-shellscript; charset=utf-8'],
         '/download/forge3d-cloud.mcpb': ['forge3d-cloud.mcpb', 'application/octet-stream'],
       };

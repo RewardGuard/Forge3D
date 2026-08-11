@@ -2,9 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>F3D Storage — remote access</title>
-<meta name="description" content="Reach your F3D Storage files on your own Mac from any device.">
+<meta name="description" content="Reach your F3D Storage files from any device.">
 <style>
   :root{ --bg:#0b0e13; --card:#11151c; --line:#222a36; --txt:#eef2f8; --muted:#9aa7ba; --steel:#c7d0dd; --lava:#ff5a1f; --lava2:#ff7a3c; --ok:#22c55e; --warn:#eab308; }
   *{box-sizing:border-box} html,body{margin:0}
@@ -46,7 +50,7 @@
   <div class="top">
     <a href="/"><img class="logo" src="/logo.png" alt="Forge3D"></a>
     <h1>F3D Storage</h1>
-    <p class="tag">Your files, on your own Mac, from anywhere.</p>
+    <p class="tag">Your files, reachable from any device.</p>
   </div>
 
   <div id="auth" class="card" style="display:none">
@@ -68,7 +72,7 @@
         <span class="status"><span class="dot" id="dot"></span> <span id="statusText">checking…</span></span>
         <button class="signout" id="signout">Sign out</button>
       </div>
-      <p class="err" id="offlineNote" style="display:none">Open Forge3D on your Mac and turn on <b>Remote access</b> (F3D Storage panel) to connect.</p>
+      <p class="err" id="offlineNote" style="display:none">F3D Storage is temporarily offline. Your files are safe — try again shortly.</p>
     </div>
 
     <div class="card">
@@ -126,7 +130,7 @@ async function refreshStatus() {
   if (!res.ok) { $('statusText').textContent = 'not signed in'; $('dot').className = 'dot off'; return false; }
   const data = await res.json();
   $('dot').className = 'dot ' + (data.online ? 'on' : 'off');
-  $('statusText').textContent = data.online ? 'your Mac is connected' : 'your Mac is offline';
+  $('statusText').textContent = data.online ? 'connected' : 'temporarily offline';
   $('offlineNote').style.display = data.online ? 'none' : 'block';
   return data.online;
 }
