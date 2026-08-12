@@ -58,8 +58,10 @@ export default function UpgradeButton() {
           {(!isPro || !hasStorage) && (
             <>
               <label className="lbl">Discount code (optional)</label>
+              {/* Never show a real code as the placeholder — it would hand a
+                  working discount to everyone who opens this panel. */}
               <input
-                className="onb-input" placeholder="e.g. LAUNCH90" value={promo}
+                className="onb-input" placeholder="Enter code" value={promo}
                 onChange={(e) => setPromo(e.target.value.toUpperCase())}
               />
               <p className="muted small" style={{ margin: '4px 0 10px' }}>
