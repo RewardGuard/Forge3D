@@ -20,6 +20,8 @@ import assert from 'node:assert/strict';
 import * as U from '../src/lib/units.js';
 import * as ER from '../src/lib/engineeringReport.js';
 import * as AP from '../src/lib/aiProvenance.js';
+import * as MC from '../src/lib/modelContext.js';
+import * as CI from '../src/lib/cadIntent.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -853,6 +855,152 @@ check('every unavailability reason offers a way forward', () => {
   }
 });
 
+
+// ---------------------------------------------------------------------------
+section('16. ENGINEERING COPILOT — Orchestra changes the model, validated');
+
+const copilotScene = () => {
+  useStore.setState({ meshes: [
+    { id: 'm1', kind: 'box', label: 'enclosure shell', position: [0, 0.2, 0], scale: [1.4, 0.4, 0.9], material: 'steel' },
+    { id: 'm2', kind: 'cylinder', label: 'mounting boss A', position: [0.5, 0.3, 0.3], scale: 0.12, material: 'steel' },
+    { id: 'm3', kind: 'cylinder', label: 'mounting boss B', position: [-0.5, 0.3, 0.3], scale: 0.12, material: 'steel' },
+  ] });
+};
+
+check('model context reports real mass from density x volume', () => {
+  copilotScene();
+  const ctx = MC.buildModelContext();
+  assert.equal(ctx.bodyCount, 3);
+  assert.ok(ctx.massProperties.totalMass_g > 0);
+  // Steel is 7.85 g/cm3 — mass must equal density x volume, no fudge exponent.
+  const b = ctx.bodies.find((x) => x.id === 'm1');
+  assert.ok(Math.abs(b.mass_g - b.volume_cm3 * 7.85) < 0.01, 'mass must be density x volume exactly');
+});
+
+check('inferred feature roles are labelled as low-confidence guesses', () => {
+  copilotScene();
+  const ctx = MC.buildModelContext();
+  const boss = ctx.bodies.find((b) => b.id === 'm2');
+  assert.equal(boss.role, 'mounting');
+  assert.equal(boss.roleConfidence, 'low', 'a label heuristic must never claim high confidence');
+  assert.ok(/heuristic/i.test(boss.roleBasis));
+});
+
+check('context always discloses that bodies are primitives, not B-rep', () => {
+  copilotScene();
+  const ctx = MC.buildModelContext();
+  assert.ok(ctx.limitations.some((l) => /B-rep|topology/i.test(l)));
+  assert.ok(ctx.simulation.caveat && /not an engineering simulation/i.test(ctx.simulation.caveat));
+});
+
+check('lighten preserves protected bodies and predicts a real mass', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  assert.ok(p.ok, p.reason);
+  assert.ok(p.preserved.includes('m2') && p.preserved.includes('m3'), 'mounting bosses must be protected by default');
+  assert.ok(!p.changes.some((c) => c.bodyId === 'm2' || c.bodyId === 'm3'), 'protected bodies must not appear in the diff');
+  assert.ok(p.predicted.massAfter_g < p.predicted.massBefore_g);
+});
+
+check('a material swap that overshoots the target says so', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  if (p.strategy === 'material') {
+    const achieved = Math.abs(p.predicted.deltaPct);
+    if (achieved - 20 > 2) {
+      assert.ok(p.explanation.bullets.some((b) => /overshoot/i.test(b)), 'must disclose the overshoot');
+    }
+  }
+});
+
+check('apply MEASURES the result rather than echoing the prediction', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  const r = CI.applyProposal(p);
+  assert.ok(r.applied);
+  const fresh = MC.buildModelContext().massProperties.totalMass_g;
+  assert.ok(Math.abs(r.measured.massAfter_g - fresh) < 1e-6, 'measured mass must come from a fresh reading');
+  assert.ok(Math.abs(r.predictionError_pct) < 1, 'prediction must track measurement');
+  CI.revertProposal(r.revertToken);
+});
+
+check('every applied change invalidates the downstream analysis stages', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  const r = CI.applyProposal(p);
+  assert.ok(r.invalidates.includes('manufacturing_ready'), 'changing geometry must un-ready the design');
+  assert.ok(r.invalidates.includes('verified'));
+  CI.revertProposal(r.revertToken);
+});
+
+check('revert restores the exact original mass', () => {
+  copilotScene();
+  const before = MC.buildModelContext().massProperties.totalMass_g;
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  const r = CI.applyProposal(p);
+  assert.ok(MC.buildModelContext().massProperties.totalMass_g !== before, 'change must actually apply');
+  const rv = CI.revertProposal(r.revertToken);
+  assert.ok(rv.reverted);
+  assert.ok(Math.abs(rv.massNow_g - before) < 1e-6, 'revert must be exact');
+});
+
+check('scaling that would strand a protected body is REFUSED with a safe maximum', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 95, strategy: 'scale' });
+  assert.equal(p.ok, false, 'shrinking the shell past its bosses must not be allowed');
+  assert.ok(/outside the shrunken geometry/i.test(p.reason));
+  assert.ok(p.alternatives.some((a) => /Target at most/i.test(a)), 'must offer the achievable number');
+});
+
+check('fillet is refused honestly, never faked', () => {
+  copilotScene();
+  const p = CI.planOperation('fillet_edges', { radius_mm: 2 });
+  assert.equal(p.ok, false);
+  assert.equal(p.refused, true);
+  assert.ok(/B-rep/i.test(p.reason), 'must name the missing kernel');
+  assert.ok(p.wouldNeed);
+  assert.ok(/will not apply a cosmetic shader round/i.test(p.note));
+});
+
+check('load-case optimisation is refused, and points at real alternatives', () => {
+  copilotScene();
+  const p = CI.planOperation('optimize_under_load', { load_N: 500 });
+  assert.equal(p.ok, false);
+  assert.ok(/no FEA solver/i.test(p.reason));
+  assert.ok(p.alternatives.length >= 2);
+  assert.ok(p.reason.includes('500 N'), 'must reflect the actual load asked about');
+});
+
+check('unknown operations and hostile args never throw', () => {
+  copilotScene();
+  for (const [op, args] of [['nope', {}], ['lighten', {}], ['lighten', { targetPct: -5 }], ['lighten', { targetPct: 'x' }],
+                            ['lighten', { targetPct: 150 }], ['set_material', { material: 'unobtainium', bodyIds: ['m1'] }],
+                            ['set_material', { bodyIds: [], material: 'pla' }]]) {
+    const p = CI.planOperation(op, args);
+    assert.equal(typeof p.ok, 'boolean');
+    if (!p.ok) assert.ok(p.reason && p.reason.length > 5, `${op} needs a real reason`);
+  }
+});
+
+check('applying a refusal is rejected', () => {
+  const p = CI.planOperation('fillet_edges', { radius_mm: 2 });
+  const r = CI.applyProposal(p);
+  assert.equal(r.applied, false);
+});
+
+check('every proposal carries an inspectable explanation', () => {
+  copilotScene();
+  for (const [op, args] of [['lighten', { targetPct: 15 }], ['set_material', { bodyIds: ['m1'], material: 'pla' }]]) {
+    const p = CI.planOperation(op, args);
+    if (!p.ok) continue;
+    assert.ok(p.explanation.headline, `${op} needs a headline`);
+    assert.ok(p.explanation.bullets.length >= 2, `${op} needs bullets`);
+    assert.ok(p.explanation.reason, `${op} needs a reason`);
+    assert.ok(p.explanation.caveats.length >= 1, `${op} must state caveats`);
+    assert.equal(p.reversible, true);
+  }
+  resetScene();
+});
 
 // ---------------------------------------------------------------------------
 console.log('\n' + '─'.repeat(64));

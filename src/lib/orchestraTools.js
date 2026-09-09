@@ -9,6 +9,8 @@
 // circuit by hand, it hands a prompt to `build_circuit` (the circuit agent).
 // ============================================================================
 import { useStore } from './store.js';
+import { buildModelContext, contextToPrompt } from './modelContext.js';
+import { planOperation, applyProposal, revertProposal, operationCatalog } from './cadIntent.js';
 import { captureViewportFresh } from './capture.js';
 import { buildNetlist, partsCatalog } from './netlist.js';
 import { PART_BY_ID, PARTS, DEFAULT_SHAPE_UNIT, SCENE_SCALE } from '../data/parts.js';
@@ -617,6 +619,55 @@ export const TOOLS = {
       }
       return { id, position_mm: a.position.map((n) => +(n / MM).toFixed(2)), scale: a.scale ?? 1 };
     },
+  },
+
+  // ── Engineering copilot ────────────────────────────────────────────────
+  // These let the director reason about and CHANGE the real model instead of
+  // describing changes. Every edit goes through cadIntent, which validates,
+  // measures the actual result, and can revert it.
+  model_context: {
+    desc: 'Read the engineering state of the current model: bodies with real mm dimensions, materials with physical properties, mass, centre of mass, envelope, inferred feature roles and known limitations. Call this BEFORE proposing any change.',
+    params: {},
+    run: () => {
+      const ctx = buildModelContext();
+      return { summary: contextToPrompt(ctx), bodies: ctx.bodies, massProperties: ctx.massProperties, limitations: ctx.limitations };
+    },
+  },
+
+  list_operations: {
+    desc: 'List the CAD operations that can be planned, with their parameters.',
+    params: {},
+    run: () => ({ operations: operationCatalog() }),
+  },
+
+  plan_change: {
+    desc: 'Plan a CAD change WITHOUT applying it. Returns a diff, a predicted result and an explanation the user can inspect — or a refusal naming the missing capability. operation: lighten|set_material|fillet_edges|optimize_under_load.',
+    params: { operation: 'string', args: 'object' },
+    run: ({ operation, args }) => {
+      const p = planOperation(operation, args || {});
+      if (!p.ok) return { planned: false, refused: Boolean(p.refused), reason: p.reason, wouldNeed: p.wouldNeed || null, alternatives: p.alternatives || [] };
+      return {
+        planned: true, operation: p.op, strategy: p.strategy,
+        changes: p.changes, preserved: p.preserved, predicted: p.predicted,
+        explanation: p.explanation, proposal: p,
+      };
+    },
+  },
+
+  apply_change: {
+    desc: 'Apply a proposal returned by plan_change. Re-measures the model afterwards and reports the ACTUAL result plus any error against the prediction. Returns a revertToken.',
+    params: { proposal: 'the proposal object from plan_change' },
+    run: ({ proposal }) => {
+      pushHistory();
+      const r = applyProposal(proposal);
+      return r;
+    },
+  },
+
+  revert_change: {
+    desc: 'Undo a change applied by apply_change, using its revertToken.',
+    params: { revertToken: 'string' },
+    run: ({ revertToken }) => revertProposal(revertToken),
   },
 
   undo: {
