@@ -1,6 +1,7 @@
 import React from 'react';
 import { useStore } from '../lib/store.js';
 import { scaleArr, packScale, avgScale } from '../lib/scaleUtil.js';
+import { isRoundable, maxCornerRadiusMm, validateCornerRadius, trueDimsMm, CORNER_STYLES, ROUNDABLE } from '../lib/rounding.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 const AXES = ['x', 'y', 'z'];
@@ -130,6 +131,66 @@ export default function Inspector() {
         value={avgScale(mesh.scale)}
         onChange={(e) => updateMesh(mesh.id, { scale: parseFloat(e.target.value) })}
       />
+
+      {/* Real corner geometry — an arc or a facet actually cut into the solid,
+          not a shader trick. The radius is validated against the body's own
+          dimensions and refuses with a reason rather than breaking silently. */}
+      {isRoundable(mesh.kind) && (() => {
+        const max = maxCornerRadiusMm(mesh);
+        const cur = Number(mesh.cornerRadius_mm) || 0;
+        const check = validateCornerRadius(mesh, cur);
+        const dims = trueDimsMm(mesh);
+        return (
+          <>
+            <div className="divider" />
+            <label className="lbl">
+              Corner radius — {cur.toFixed(2)} mm <span className="muted">(max {max.toFixed(2)} mm · {ROUNDABLE[mesh.kind]})</span>
+            </label>
+            <div className="row">
+              <input
+                type="range" min="0" max={Math.max(max, 0.01)} step={Math.max(max / 200, 0.01)}
+                value={Math.min(cur, max)}
+                onChange={(e) => updateMesh(mesh.id, { cornerRadius_mm: parseFloat(e.target.value) })}
+              />
+              <input
+                type="number" min="0" step="0.1" value={cur}
+                style={{ width: 74 }}
+                onChange={(e) => updateMesh(mesh.id, { cornerRadius_mm: parseFloat(e.target.value) || 0 })}
+              />
+            </div>
+            {!check.ok && <p className="status error small">{check.reason}</p>}
+            {check.ok && check.note && <p className="muted small">{check.note}</p>}
+            {cur > 0 && (
+              <>
+                <label className="lbl">Corner type</label>
+                <div className="seg">
+                  {Object.values(CORNER_STYLES).map((st) => (
+                    <button
+                      key={st.id}
+                      className={'seg-btn' + ((mesh.cornerStyle || 'round') === st.id ? ' on' : '')}
+                      title={st.detail}
+                      onClick={() => updateMesh(mesh.id, { cornerStyle: st.id })}
+                    >{st.label}</button>
+                  ))}
+                </div>
+                <label className="lbl">
+                  Arc segments — {mesh.cornerSegments || CORNER_STYLES[mesh.cornerStyle || 'round'].segments}
+                  <span className="muted"> (higher = smoother, heavier to export)</span>
+                </label>
+                <input
+                  type="range" min="1" max="16" step="1"
+                  value={mesh.cornerSegments || CORNER_STYLES[mesh.cornerStyle || 'round'].segments}
+                  onChange={(e) => updateMesh(mesh.id, { cornerSegments: parseInt(e.target.value, 10) })}
+                />
+                <p className="muted small">
+                  Body is {dims.map((d) => d.toFixed(1)).join(' × ')} mm. The radius is baked into the
+                  geometry at true size, so it stays circular on every axis even when the body is stretched.
+                </p>
+              </>
+            )}
+          </>
+        );
+      })()}
 
       <label className="lbl">Color</label>
       <input type="color" value={mesh.color} onChange={(e) => updateMesh(mesh.id, { color: e.target.value })} />

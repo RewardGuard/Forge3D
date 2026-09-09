@@ -10,7 +10,7 @@ import { Evaluator, Brush, ADDITION, SUBTRACTION } from 'three-bvh-csg';
 import { useStore } from '../lib/store.js';
 import { resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr, packScale } from '../lib/scaleUtil.js';
-import { makeGeometry, bakedGeometry, prepareBrushGeometry } from '../lib/geometryFactory.js';
+import { makeGeometry, bakedGeometry, prepareBrushGeometry, geometryScale } from '../lib/geometryFactory.js';
 import CaptureFramer from './CaptureFramer.jsx';
 
 // PBR hints derived from the mesh's assigned physical material (metal vs not).
@@ -154,7 +154,7 @@ function CSGGroup({ members }) {
             key={m.id}
             position={m.position}
             rotation={m.rotation || [0, 0, 0]}
-            scale={scaleArr(m.scale)}
+            scale={geometryScale(m, scaleArr)}
             castShadow
             receiveShadow
             onClick={(e) => { e.stopPropagation(); selectMesh(m.id, e.nativeEvent?.metaKey || e.nativeEvent?.ctrlKey || e.nativeEvent?.shiftKey); }}
@@ -354,7 +354,7 @@ function MeshItem({ mesh, ghost = false }) {
         ref={groupRef}
         position={mesh.position}
         rotation={mesh.rotation || [0, 0, 0]}
-        scale={scaleArr(mesh.scale)}
+        scale={geometryScale(mesh, scaleArr)}
         onClick={onClick}
       >
         {content}

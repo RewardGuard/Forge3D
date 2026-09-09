@@ -2,8 +2,17 @@
 // merger and the exporters. Includes 'baked' — a mesh whose geometry was
 // produced by merging a group (stored as raw position/normal arrays).
 import * as THREE from 'three';
+import { roundedBoxGeometry, roundedCylinderGeometry, hasBakedScale } from './rounding.js';
 
 export function makeGeometry(mesh) {
+  // A corner radius bakes the body's true dimensions into the geometry so the
+  // round stays circular; the renderer must then draw it at scale 1 (see
+  // geometryScale below). Rounding a unit cube and scaling afterwards would
+  // give an elliptical "radius", which is not a radius at all.
+  if (hasBakedScale(mesh)) {
+    if (mesh.kind === 'cylinder') return roundedCylinderGeometry(mesh);
+    return roundedBoxGeometry(mesh);
+  }
   switch (mesh.kind) {
     case 'sphere': return new THREE.SphereGeometry(0.5, 32, 32);
     case 'cylinder': return new THREE.CylinderGeometry(0.4, 0.4, 1, 48);
@@ -44,4 +53,10 @@ export function bakedGeometry(mesh) {
     g.computeVertexNormals();
   }
   return g;
+}
+
+// The scale the renderer should apply. Meshes whose geometry already carries
+// their true size must not be scaled again.
+export function geometryScale(mesh, scaleArr) {
+  return hasBakedScale(mesh) ? [1, 1, 1] : scaleArr(mesh.scale);
 }

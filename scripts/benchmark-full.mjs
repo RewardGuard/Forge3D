@@ -22,6 +22,7 @@ import * as ER from '../src/lib/engineeringReport.js';
 import * as AP from '../src/lib/aiProvenance.js';
 import * as MC from '../src/lib/modelContext.js';
 import * as CI from '../src/lib/cadIntent.js';
+import * as RD from '../src/lib/rounding.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -1000,6 +1001,115 @@ check('every proposal carries an inspectable explanation', () => {
     assert.equal(p.reversible, true);
   }
   resetScene();
+});
+
+// ---------------------------------------------------------------------------
+section('17. CORNER GEOMETRY — real rounds, honest limits');
+
+check('true dimensions account for non-uniform scale', () => {
+  const d = RD.trueDimsMm({ kind: 'box', scale: [1.4, 0.4, 0.9] });
+  assert.equal(d.length, 3);
+  assert.ok(d[0] > d[2] && d[2] > d[1], 'must reflect the stretch, not the unit cube');
+});
+
+check('max radius is half the smallest dimension', () => {
+  const mesh = { kind: 'box', scale: [1.4, 0.4, 0.9] };
+  const dims = RD.trueDimsMm(mesh);
+  assert.ok(Math.abs(RD.maxCornerRadiusMm(mesh) - Math.min(...dims) / 2) < 1e-9);
+});
+
+check('an impossible radius is refused WITH the numbers', () => {
+  const mesh = { kind: 'box', scale: [1.4, 0.4, 0.9] };
+  const v = RD.validateCornerRadius(mesh, 50);
+  assert.equal(v.ok, false);
+  assert.ok(/exceeds the available local geometry/i.test(v.reason), 'must use the spec wording');
+  assert.ok(/116\.7|33\.3|75\.0/.test(v.reason), 'must quote the real dimensions');
+  assert.ok(Number.isFinite(v.maxRadiusMm), 'must say what WOULD fit');
+});
+
+check('a legal radius passes and zero means sharp', () => {
+  const mesh = { kind: 'box', scale: [1.4, 0.4, 0.9] };
+  assert.ok(RD.validateCornerRadius(mesh, 3).ok);
+  const z = RD.validateCornerRadius(mesh, 0);
+  assert.ok(z.ok && /sharp/i.test(z.note));
+});
+
+check('non-roundable primitives are refused by name', () => {
+  for (const k of ['sphere', 'torus', 'icosahedron']) {
+    const v = RD.validateCornerRadius({ kind: k, scale: 1 }, 2);
+    assert.equal(v.ok, false, k);
+    assert.ok(v.reason.includes(k));
+  }
+});
+
+check('rounded and chamfered boxes are genuinely different solids', () => {
+  const base = { kind: 'box', scale: [1.4, 0.4, 0.9], cornerRadius_mm: 3 };
+  const round = RD.roundedBoxGeometry({ ...base, cornerStyle: 'round' });
+  const cham = RD.roundedBoxGeometry({ ...base, cornerStyle: 'chamfer' });
+  assert.ok(round.attributes.position.count > cham.attributes.position.count * 2,
+    'a chamfer is one facet per edge; a round is many');
+  assert.ok(cham.attributes.position.count > 0);
+});
+
+check('a rounded cylinder is a real surface of revolution', () => {
+  const g = RD.roundedCylinderGeometry({ kind: 'cylinder', scale: 1, cornerRadius_mm: 2 });
+  assert.ok(g.attributes.position.count > 100);
+  const plain = RD.roundedCylinderGeometry({ kind: 'cylinder', scale: 1, cornerRadius_mm: 0 });
+  assert.ok(plain.attributes.position.count !== g.attributes.position.count, 'rounding must change the mesh');
+});
+
+check('geometry is built at TRUE size so the radius stays circular', () => {
+  // The whole point: a unit cube rounded then stretched would give an ellipse.
+  const stretched = RD.roundedBoxGeometry({ kind: 'box', scale: [4, 0.5, 0.5], cornerRadius_mm: 1, cornerStyle: 'round' });
+  stretched.computeBoundingBox();
+  const bb = stretched.boundingBox;
+  const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y;
+  assert.ok(w / h > 6, 'the geometry itself must carry the stretch');
+  assert.equal(RD.hasBakedScale({ kind: 'box', cornerRadius_mm: 1 }), true);
+  assert.equal(RD.hasBakedScale({ kind: 'box', cornerRadius_mm: 0 }), false, 'unrounded meshes keep normal scaling');
+});
+
+check('rounding never throws on hostile input', () => {
+  for (const m of [{}, { kind: 'box' }, { kind: 'box', scale: NaN }, { kind: 'box', scale: [0, 0, 0] },
+                   { kind: 'box', scale: 1, cornerRadius_mm: -5 }, { kind: 'cylinder', scale: [1, 1, 1], cornerRadius_mm: 1e9 }]) {
+    const v = RD.validateCornerRadius(m, m.cornerRadius_mm ?? 1);
+    assert.equal(typeof v.ok, 'boolean');
+    if (RD.isRoundable(m.kind) && Number(m.cornerRadius_mm) > 0) {
+      const g = m.kind === 'cylinder' ? RD.roundedCylinderGeometry(m) : RD.roundedBoxGeometry(m);
+      assert.ok(g.attributes.position.count > 0, 'must still produce geometry');
+    }
+  }
+});
+
+check('round_corners operation applies and reverts', () => {
+  useStore.setState({ meshes: [
+    { id: 'r1', kind: 'box', label: 'shell', position: [0, 0.2, 0], scale: [1.4, 0.4, 0.9], material: 'abs' },
+  ] });
+  const p = CI.planOperation('round_corners', { radius_mm: 3, preserve: [] });
+  assert.ok(p.ok, p.reason);
+  const r = CI.applyProposal(p);
+  assert.ok(r.applied);
+  assert.equal(useStore.getState().meshes[0].cornerRadius_mm, 3);
+  CI.revertProposal(r.revertToken);
+  assert.ok(!useStore.getState().meshes[0].cornerRadius_mm);
+  resetScene();
+});
+
+check('an over-large radius is refused with the achievable number', () => {
+  useStore.setState({ meshes: [
+    { id: 'r1', kind: 'box', label: 'shell', position: [0, 0.2, 0], scale: [1.4, 0.4, 0.9], material: 'abs' },
+  ] });
+  const p = CI.planOperation('round_corners', { radius_mm: 500, preserve: [] });
+  assert.equal(p.ok, false);
+  assert.ok(p.alternatives.some((a) => /Try [\d.]+ mm/.test(a)), 'must offer the largest that fits');
+  resetScene();
+});
+
+check('edge-selection fillet is still refused, and points at round_corners', () => {
+  const p = CI.planOperation('fillet_edges', { radius_mm: 2 });
+  assert.equal(p.ok, false);
+  assert.ok(/B-rep/.test(p.reason));
+  assert.ok(p.alternatives.some((a) => /round_corners/.test(a)), 'must name the thing that DOES work');
 });
 
 // ---------------------------------------------------------------------------

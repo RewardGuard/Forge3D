@@ -19,6 +19,7 @@ import { useStore } from './store.js';
 import { MATERIALS, hasStructuralData } from './materials.js';
 import { buildModelContext, bodyMass } from './modelContext.js';
 import { CAPABILITIES } from './engineeringReport.js';
+import { isRoundable, validateCornerRadius, maxCornerRadiusMm, CORNER_STYLES, ROUNDABLE } from './rounding.js';
 
 const PROTECTED_DEFAULT = ['mounting', 'electronic'];
 
@@ -236,16 +237,89 @@ export const OPERATIONS = {
   // The spec's other two examples land here. Both are legitimate requests
   // that Forge3D genuinely cannot serve, so it says exactly why instead of
   // producing something that looks like an answer.
+  // Real corner geometry on primitives. This USED to be a blanket refusal,
+  // which was over-broad: a box with a corner radius is an exactly-defined
+  // solid that exports correctly. The refusal now applies only to what
+  // genuinely needs B-rep — arbitrary edge selection on arbitrary solids.
+  round_corners: {
+    id: 'round_corners',
+    label: 'Round or chamfer corners',
+    params: { radius_mm: 'number', style: 'round|chamfer', bodyIds: 'string[] (default: all roundable)', preserve: 'string[] of roles' },
+    plan(ctx, { radius_mm, style = 'round', bodyIds = null, preserve = PROTECTED_DEFAULT } = {}) {
+      const r = Number(radius_mm);
+      if (!Number.isFinite(r) || r < 0) return bad('round_corners', `radius_mm must be a positive number — got ${radius_mm}.`);
+      if (!CORNER_STYLES[style]) return bad('round_corners', `Unknown corner style "${style}". Use: ${Object.keys(CORNER_STYLES).join(' or ')}.`);
+
+      const { editable, protectedIds } = partition(ctx, { preserve, only: bodyIds });
+      const meshes = useStore.getState().meshes || [];
+      const roundable = [];
+      const skipped = [];
+      for (const b of editable) {
+        const mesh = meshes.find((m) => m.id === b.id);
+        if (!mesh) continue;
+        if (!isRoundable(mesh.kind)) { skipped.push({ id: b.id, label: b.label, why: `${mesh.kind} has no corner to round` }); continue; }
+        const chk = validateCornerRadius(mesh, r);
+        if (!chk.ok) { skipped.push({ id: b.id, label: b.label, why: chk.reason, maxRadiusMm: chk.maxRadiusMm }); continue; }
+        roundable.push({ body: b, mesh, check: chk });
+      }
+
+      if (!roundable.length) {
+        const worst = skipped.find((x) => Number.isFinite(x.maxRadiusMm));
+        return bad('round_corners',
+          skipped.length
+            ? `No body can take a ${r} mm radius. ${skipped[0].why}`
+            : 'There is nothing roundable in the selection.',
+          [
+            ...(worst ? [`Try ${worst.maxRadiusMm} mm — the largest this geometry allows`] : []),
+            `Roundable primitives: ${Object.keys(ROUNDABLE).join(', ')}`,
+          ]);
+      }
+
+      return {
+        ok: true, op: 'round_corners', strategy: style,
+        changes: roundable.map(({ body, mesh }) => ({
+          bodyId: body.id, label: body.label, field: 'cornerRadius_mm',
+          from: Number(mesh.cornerRadius_mm) || 0, to: r,
+          style, maxRadiusMm: +maxCornerRadiusMm(mesh).toFixed(3),
+        })),
+        preserved: protectedIds,
+        predicted: {
+          massBefore_g: ctx.massProperties.totalMass_g,
+          massAfter_g: ctx.massProperties.totalMass_g,
+          deltaPct: 0,
+        },
+        explanation: {
+          headline: `${style === 'chamfer' ? 'Chamfer' : 'Round'} ${roundable.length} ${roundable.length === 1 ? 'body' : 'bodies'} at ${r} mm`,
+          bullets: [
+            `${CORNER_STYLES[style].detail}`,
+            `Applied to: ${roundable.map((x) => x.body.label).join(', ')}`,
+            ...(protectedIds.length ? [`Protected and untouched: ${protectedIds.join(', ')}`] : []),
+            ...skipped.map((x) => `SKIPPED ${x.label}: ${x.why}`),
+            'The radius is baked into the geometry at true size, so it stays circular even on a stretched body.',
+          ],
+          reason: 'Corner radius is real geometry on these primitives — it tessellates and exports as a solid, not a shading effect.',
+          caveats: [
+            'Mass is reported unchanged: the material removed at the corners is below the resolution of the primitive volume model.',
+            'This rounds ALL of a primitive\'s corners. Selecting individual edges needs a B-rep kernel Forge3D does not have.',
+          ],
+        },
+        reversible: true,
+      };
+    },
+  },
+
+  // Still refused, but now only for what actually needs B-rep.
   fillet_edges: {
     id: 'fillet_edges',
-    label: 'Fillet edges',
+    label: 'Fillet selected edges',
     params: { radius_mm: 'number', edges: 'selection' },
-    plan() {
+    plan(ctx, { radius_mm } = {}) {
       return refuse('fillet_edges', 'draft_angle', {
-        reason: 'A real fillet is a blend surface between two faces, which needs edge and face topology. Forge3D composes from primitives and has no B-rep kernel, so there are no edges to select and no surface to blend.',
-        wouldNeed: 'A boundary-representation kernel (edges, faces, loops) with a rolling-ball blend operation, plus tangency and continuity handling.',
+        reason: 'Filleting INDIVIDUAL selected edges needs edge and face topology, and Forge3D composes from primitives with no B-rep kernel — there are no edges to select.',
+        wouldNeed: 'A boundary-representation kernel (edges, faces, loops) with a rolling-ball blend, plus tangency and continuity handling.',
         alternatives: [
-          'Model the round explicitly as a separate primitive where it matters',
+          `Use round_corners to round every corner of a primitive at once${Number.isFinite(Number(radius_mm)) ? ` (radius ${radius_mm} mm)` : ''} — that IS real geometry`,
+          'Model the blend explicitly as a separate primitive where it matters',
           'Export STL and fillet in a B-rep CAD package',
         ],
         note: 'Forge3D will not apply a cosmetic shader round and call it a fillet.',
@@ -369,6 +443,7 @@ export function applyProposal(proposal) {
     if (!c) return m;
     if (c.field === 'material') return { ...m, material: c.to };
     if (c.field === 'scale') return { ...m, scale: c.to };
+    if (c.field === 'cornerRadius_mm') return { ...m, cornerRadius_mm: c.to, cornerStyle: c.style || m.cornerStyle || 'round' };
     return m;
   });
   useStore.setState({ meshes: next });
