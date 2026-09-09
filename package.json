@@ -18,7 +18,8 @@
     "test": "node scripts/benchmark-sim.mjs && node scripts/acceptance-orchestra.mjs && node scripts/benchmark-full.mjs",
     "test:acceptance": "node scripts/acceptance-orchestra.mjs",
     "test:full": "node scripts/benchmark-full.mjs",
-    "test:kernel": "node scripts/kernel-proof.mjs"
+    "test:kernel": "node scripts/kernel-proof.mjs",
+    "design:phone": "node scripts/design-phone.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.0",
