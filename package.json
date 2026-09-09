@@ -17,12 +17,14 @@
     "start": "cross-env NODE_ENV=development electron .",
     "test": "node scripts/benchmark-sim.mjs && node scripts/acceptance-orchestra.mjs && node scripts/benchmark-full.mjs",
     "test:acceptance": "node scripts/acceptance-orchestra.mjs",
-    "test:full": "node scripts/benchmark-full.mjs"
+    "test:full": "node scripts/benchmark-full.mjs",
+    "test:kernel": "node scripts/kernel-proof.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.0",
     "@react-three/fiber": "^8.17.10",
     "@react-three/rapier": "^1.5.0",
+    "opencascade.js": "^1.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.169.0",

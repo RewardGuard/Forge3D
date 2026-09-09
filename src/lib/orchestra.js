@@ -379,15 +379,50 @@ async function genericLoop(goal, headroom) {
 // + a button — not a lamp.
 // Models the user can use, BEST-CAPABILITY FIRST; the free base model is always
 // the floor at the end. Only models with a key are listed (base needs none).
+// Models Orchestra can actually reach right now, best first.
+//
+// This used to require a personal API key for every provider, which made
+// "Claude" in the Director picker a dead card for anyone on a Pro plan: the
+// server holds an Anthropic key and can serve claude-sonnet-5, but the client
+// never knew. An entitled account (Pro or trial) can route the cloud-served
+// models WITHOUT pasting a key, so those count as available too.
 function availableModels() {
   const s = S();
+  const entitled = Boolean(s.entitled || s.me?.plan === 'pro' || s.me?.trial?.active);
   const ranked = [
-    ['anthropic', s.hasAnthropicKey], ['gemini', s.hasGeminiKey], ['groq', s.hasGroqKey],
-    ['glm', s.hasGlmKey], ['mistral', s.hasMistralKey], ['openrouter', s.hasOpenrouterKey],
+    ['anthropic', s.hasAnthropicKey || entitled],
+    ['gemini', s.hasGeminiKey || entitled],
+    ['groq', s.hasGroqKey || entitled],
+    ['glm', s.hasGlmKey || entitled],
+    ['mistral', s.hasMistralKey || entitled],
+    ['openrouter', s.hasOpenrouterKey],
   ];
   const list = ranked.filter(([, k]) => k).map(([m]) => m);
   list.push('base');
   return list;
+}
+
+// How a chosen Director is actually reached: the user's own key, or the cloud
+// on their subscription. The UI shows this so nobody has to guess why a model
+// is or isn't usable.
+export function modelRoute(id) {
+  const s = S();
+  const ownKey = {
+    anthropic: s.hasAnthropicKey, gemini: s.hasGeminiKey, groq: s.hasGroqKey,
+    glm: s.hasGlmKey, mistral: s.hasMistralKey, openrouter: s.hasOpenrouterKey,
+  }[id];
+  if (ownKey) return { reachable: true, via: 'your API key', detail: 'Billed to your own provider account.' };
+
+  const entitled = Boolean(s.entitled || s.me?.plan === 'pro' || s.me?.trial?.active);
+  const cloudServed = ['anthropic', 'gemini', 'groq', 'glm', 'mistral'].includes(id);
+  if (id === 'base') return { reachable: true, via: 'Forge3D Cloud', detail: 'Free base model, no key needed.' };
+  if (cloudServed && entitled) {
+    return { reachable: true, via: 'Forge3D Cloud (your plan)', detail: 'Served by Forge3D Cloud on your subscription — no API key needed.' };
+  }
+  if (cloudServed) {
+    return { reachable: false, via: null, detail: 'Needs either your own API key or a Forge3D Cloud plan.', fix: 'upgrade_or_key' };
+  }
+  return { reachable: false, via: null, detail: 'Needs your own API key.', fix: 'key' };
 }
 function setDirectorPersist(model) {
   S().setOrchestraDirector(model);

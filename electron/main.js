@@ -660,7 +660,7 @@ const HF_VISION_MODEL = 'zai-org/GLM-4.5V';
 const PROXY_URL = process.env.FORGE3D_PROXY || 'https://forge3d.design/f3d-api';
 
 // Call the cloud proxy (server holds the key). Returns generated text.
-async function proxyGenerate({ system, userText, maxTokens = 2000 }) {
+async function proxyGenerate({ system, userText, maxTokens = 2000, provider = null }) {
   const cfg = readConfig();
   if (!cfg.accountToken) {
     throw new Error('F3D Cloud needs a free account: open Settings → F3D Cloud Account to sign up (5,000 free tokens/month), or enter your own API key.');
@@ -668,7 +668,7 @@ async function proxyGenerate({ system, userText, maxTokens = 2000 }) {
   const res = await fetch(`${PROXY_URL}/v1/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.accountToken}` },
-    body: JSON.stringify({ system, user: userText, maxTokens, provider: cfg.cloudAi || 'glm' }),
+    body: JSON.stringify({ system, user: userText, maxTokens, provider: provider || cfg.cloudAi || 'glm' }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `Forge3D Cloud error ${res.status}`);
@@ -806,6 +806,27 @@ async function generateText({ cfg, system, userText, provider: forced, maxTokens
   if (provider === 'base') {
     const text = await proxyGenerate({ system, userText, maxTokens });
     return { text, mock: false, provider: 'base' };
+  }
+
+  // A model the user picked but holds no personal key for. The Forge3D Cloud
+  // server keeps keys for these, so an account with an entitlement can reach
+  // them without pasting anything. Without this, picking "Claude" in the
+  // Director list went straight to api.anthropic.com with an undefined key and
+  // returned 401 — which is why Claude looked unselectable.
+  const CLOUD_SERVED = { anthropic: 'claude', gemini: 'gemini', groq: 'groq', glm: 'glm', mistral: 'mistral' };
+  const personalKey = {
+    anthropic: cfg.anthropicKey, gemini: cfg.geminiKey, groq: cfg.groqKey,
+    glm: cfg.glmKey, mistral: cfg.mistralKey, openrouter: cfg.openrouterKey,
+  }[provider];
+  if (!personalKey && CLOUD_SERVED[provider] && cfg.accountToken) {
+    const text = await proxyGenerate({ system, userText, maxTokens, provider: CLOUD_SERVED[provider] });
+    return { text, mock: false, provider, via: 'forge3d-cloud' };
+  }
+  if (!personalKey && CLOUD_SERVED[provider] && !cfg.accountToken) {
+    throw new Error(
+      `${provider} needs either your own API key (Settings → Orchestra AI) or a Forge3D Cloud account. ` +
+      `Sign in under Settings → F3D Cloud Account to use it on your plan.`
+    );
   }
 
   if (provider === 'gemini') {
