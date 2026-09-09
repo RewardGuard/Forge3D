@@ -30,6 +30,23 @@ export async function kernel() {
   if (_oc) return _oc;
   if (_loading) return _loading;
   _loading = (async () => {
+    // Two environments, one kernel. In the app, Vite resolves the wasm to a
+    // URL; in Node (tests, headless design scripts) there is no bundler, so
+    // the binary is read off disk and handed over directly. Without this the
+    // kernel would only be testable inside the running app, which is exactly
+    // where a broken kernel is hardest to diagnose.
+    const isNode = typeof process !== 'undefined' && process.versions?.node && typeof window === 'undefined';
+    if (isNode) {
+      const { createRequire } = await import('node:module');
+      const nodeFs = await import('node:fs');
+      const nodePath = await import('node:path');
+      const req = createRequire(import.meta.url);
+      const dist = nodePath.join(process.cwd(), 'node_modules/opencascade.js/dist');
+      globalThis.__dirname = globalThis.__dirname || dist;   // the emscripten glue expects it
+      const factory = req(nodePath.join(dist, 'opencascade.wasm.js')).default;
+      _oc = await new factory({ wasmBinary: nodeFs.readFileSync(nodePath.join(dist, 'opencascade.wasm.wasm')) });
+      return _oc;
+    }
     const mod = await import('opencascade.js/dist/opencascade.wasm.js');
     const factory = mod.default || mod;
     const wasmUrl = (await import('opencascade.js/dist/opencascade.wasm.wasm?url')).default;
@@ -121,7 +138,7 @@ export async function chamferEdges(shape, distanceMm, edgeIndices = null) {
     const all = await edgesOf(shape);
     const chosen = edgeIndices ? all.filter((e) => edgeIndices.includes(e.index)) : all;
     if (!chosen.length) return { ok: false, reason: 'No edge matched the selection.' };
-    for (const e of chosen) mk.Add_1(Number(distanceMm), e.edge);
+    for (const e of chosen) mk.Add_2(Number(distanceMm), e.edge);
     mk.Build();
     if (!mk.IsDone()) return { ok: false, reason: `The kernel could not build a ${distanceMm} mm chamfer.` };
     return { ok: true, shape: mk.Shape(), edges: chosen.length };
@@ -130,17 +147,38 @@ export async function chamferEdges(shape, distanceMm, edgeIndices = null) {
   }
 }
 
-/** Hollow a solid to a wall thickness — a real shell, not a scaled copy. */
-export async function shell(shape, thicknessMm) {
+/**
+ * Hollow a solid to a wall thickness.
+ *
+ * `openFaceIndex` picks the face to remove — the opening. A shell with NO
+ * opening is a sealed double-wall, which is rarely what anyone means by
+ * "hollow", so one face is removed by default. Pass null to keep it sealed.
+ */
+export async function shell(shape, thicknessMm, openFaceIndex = 0) {
   const oc = await kernel();
+  const t = Math.abs(Number(thicknessMm));
+  if (!(t > 0)) return { ok: false, reason: `Wall thickness must be positive — got ${thicknessMm}.` };
   try {
-    const faces = new oc.TopTools_ListOfShape_1();
     const mk = new oc.BRepOffsetAPI_MakeThickSolid_1();
-    mk.MakeThickSolidByJoin(shape, faces, -Math.abs(Number(thicknessMm)), 1e-3,
+    const remove = new oc.TopTools_ListOfShape_1();
+    if (openFaceIndex != null) {
+      const ex = new oc.TopExp_Explorer_2(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+      for (let i = 0; ex.More(); ex.Next(), i++) {
+        if (i === openFaceIndex) { remove.Append_1(oc.TopoDS.Face_1(ex.Current())); break; }
+      }
+    }
+    mk.MakeThickSolidByJoin(shape, remove, -t, 1e-3,
       oc.BRepOffset_Mode.BRepOffset_Skin, false, false, oc.GeomAbs_JoinType.GeomAbs_Arc, false);
-    return mk.IsDone() ? { ok: true, shape: mk.Shape() } : { ok: false, reason: `Could not shell to ${thicknessMm} mm.` };
+    if (!mk.IsDone()) {
+      return { ok: false, reason: `The kernel could not hollow this solid to a ${t} mm wall — the offset self-intersects, which happens when the wall approaches half the smallest dimension.` };
+    }
+    return { ok: true, shape: mk.Shape(), opened: openFaceIndex != null };
   } catch (e) {
-    return { ok: false, reason: `The kernel could not hollow this solid to ${thicknessMm} mm.`, kernelError: String(e?.message || e).slice(0, 200) };
+    return {
+      ok: false,
+      reason: `The kernel could not hollow this solid to ${t} mm. A wall near half the body's smallest dimension leaves no cavity.`,
+      kernelError: String(e?.message || e).slice(0, 200),
+    };
   }
 }
 
@@ -148,7 +186,10 @@ export async function shell(shape, thicknessMm) {
 /** STEP — the format real manufacturing consumes. Returns the file text. */
 export async function exportSTEP(shape) {
   const oc = await kernel();
-  const name = `f3d-${Date.now()}.step`;
+  // Short, fixed name: OCCT's STEP writer fails to produce a readable file
+  // for long numeric names in the emscripten virtual FS. This path is scratch
+  // space inside WASM and never reaches the user.
+  const name = 'out.step';
   const w = new oc.STEPControl_Writer_1();
   w.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true);
   const status = w.Write(name);
@@ -160,12 +201,13 @@ export async function exportSTEP(shape) {
 
 export async function importSTEP(text) {
   const oc = await kernel();
-  const name = `in-${Date.now()}.step`;
+  const name = 'in.step';
   oc.FS.writeFile(name, text);
   try {
     const r = new oc.STEPControl_Reader_1();
     if (r.ReadFile(name) !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) return { ok: false, reason: 'STEP file could not be read.' };
-    r.TransferRoots(new oc.Message_ProgressRange_1?.() ?? undefined);
+    // This OCCT build takes no progress range.
+    r.TransferRoots();
     return { ok: true, shape: r.OneShape() };
   } catch (e) {
     return { ok: false, reason: 'STEP import failed.', kernelError: String(e?.message || e).slice(0, 200) };
@@ -193,7 +235,7 @@ export async function tessellate(shape, deflectionMm = 0.1) {
     if (tri.IsNull()) continue;
     const t = tri.get();
     const trsf = loc.Transformation();
-    const reversed = face.Orientation() === oc.TopAbs_Orientation.TopAbs_REVERSED;
+    const reversed = face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED;
     for (let i = 1; i <= t.NbTriangles(); i++) {
       const tr = t.Triangle(i);
       const idx = [tr.Value(1), tr.Value(2), tr.Value(3)];

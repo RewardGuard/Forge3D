@@ -300,6 +300,17 @@ export const useStore = create((set, get) => ({
       });
       return { meshes: keep, selectedMeshId: id, selectedMeshIds: [id] };
     }),
+  // Swap one body for another, keeping its id, world position and selection.
+  // Used by the B-rep kernel: a filleted body is a baked solid, not the
+  // primitive it came from, but from the user's point of view it is still
+  // "that object" — same id, same place, still selected.
+  replaceMesh: (id, next) =>
+    set((s) => ({
+      meshes: s.meshes.map((m) => (m.id === id
+        ? { ...next, id, position: m.position, rotation: m.rotation, groupId: m.groupId, attachedTo: m.attachedTo }
+        : m)),
+    })),
+
   // reverse the spin direction a motor imparts on its attached object
   setSpinReverse: (id, spinReverse) =>
     set((s) => ({ meshes: s.meshes.map((m) => (m.id === id ? { ...m, spinReverse } : m)) })),

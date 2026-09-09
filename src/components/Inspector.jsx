@@ -2,6 +2,8 @@ import React from 'react';
 import { useStore } from '../lib/store.js';
 import { scaleArr, packScale, avgScale } from '../lib/scaleUtil.js';
 import { isRoundable, maxCornerRadiusMm, validateCornerRadius, trueDimsMm, CORNER_STYLES, ROUNDABLE } from '../lib/rounding.js';
+import { runKernelOp, kernelSupports, edgeCount, meshToSTEP } from '../lib/kernelBridge.js';
+import { kernelStatus, KERNEL_UNLOCKS } from '../lib/kernel.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 const AXES = ['x', 'y', 'z'];
@@ -23,6 +25,12 @@ export default function Inspector() {
   const setSpinReverse = useStore((s) => s.setSpinReverse);
   const setMeshNegative = useStore((s) => s.setMeshNegative);
   const updateMesh = useStore((s) => s.updateMesh);
+  const replaceMesh = useStore((s) => s.replaceMesh);
+  const [kOp, setKOp] = React.useState('fillet');
+  const [kVal, setKVal] = React.useState(2);
+  const [kBusy, setKBusy] = React.useState(false);
+  const [kMsg, setKMsg] = React.useState(null);
+  const [kEdges, setKEdges] = React.useState(null);
   const removeMesh = useStore((s) => s.removeMesh);
   const transformMode = useStore((s) => s.transformMode);
   const setTransformMode = useStore((s) => s.setTransformMode);
@@ -197,6 +205,76 @@ export default function Inspector() {
 
       {mesh.kind === 'part' && mesh.mm && (
         <p className="muted small">Footprint: {mesh.mm[0].toFixed(0)}×{mesh.mm[2].toFixed(0)}×{mesh.mm[1].toFixed(0)} mm (real scale)</p>
+      )}
+
+      {/* ── B-rep kernel ────────────────────────────────────────────────
+          These operations run in OpenCascade, on a real solid with real edge
+          topology. A radius the geometry cannot carry is REFUSED by the
+          kernel and the reason is shown — no broken geometry is ever
+          produced. The result is a baked solid, so the parametric primitive
+          is gone until you undo. */}
+      {kernelSupports(mesh.kind) && (
+        <>
+          <div className="divider" />
+          <label className="lbl">
+            B-rep kernel <span className="muted">(OpenCascade — real solid operations)</span>
+          </label>
+          <div className="seg">
+            {[['fillet', 'Fillet'], ['chamfer', 'Chamfer'], ['shell', 'Hollow']].map(([id, label]) => (
+              <button key={id} className={'seg-btn' + (kOp === id ? ' on' : '')} onClick={() => { setKOp(id); setKMsg(null); }}>{label}</button>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 6 }}>
+            <input
+              type="number" min="0.1" step="0.1" value={kVal} style={{ width: 84 }}
+              onChange={(e) => setKVal(parseFloat(e.target.value) || 0)}
+            />
+            <span className="muted small">
+              {kOp === 'shell' ? 'wall thickness (mm)' : kOp === 'chamfer' ? 'distance (mm)' : 'radius (mm)'}
+            </span>
+            <button
+              className="btn primary" disabled={kBusy}
+              onClick={async () => {
+                setKBusy(true); setKMsg({ kind: 'info', text: kernelStatus().loading || !kernelStatus().ready ? 'Loading the B-rep kernel (~64 MB, once per session)…' : 'Running…' });
+                const args = kOp === 'shell' ? { thicknessMm: kVal } : kOp === 'chamfer' ? { distanceMm: kVal } : { radiusMm: kVal };
+                const r = await runKernelOp(mesh, kOp, args);
+                if (r.ok) {
+                  replaceMesh(mesh.id, r.mesh);
+                  setKMsg({ kind: 'ok', text: `${kOp} applied — ${r.summary}` });
+                } else {
+                  setKMsg({ kind: 'err', text: r.reason });
+                }
+                setKBusy(false);
+              }}
+            >{kBusy ? '…' : 'Apply'}</button>
+          </div>
+          {kMsg && (
+            <p className={kMsg.kind === 'err' ? 'status error small' : kMsg.kind === 'ok' ? 'status ok small' : 'muted small'}>
+              {kMsg.text}
+            </p>
+          )}
+          <div className="row" style={{ marginTop: 6 }}>
+            <button className="btn ghost" disabled={kBusy} onClick={async () => {
+              setKBusy(true);
+              const n = await edgeCount(mesh);
+              setKEdges(n); setKBusy(false);
+            }}>Count edges</button>
+            <button className="btn ghost" disabled={kBusy} onClick={async () => {
+              setKBusy(true); setKMsg({ kind: 'info', text: 'Exporting STEP…' });
+              const r = await meshToSTEP(mesh);
+              if (r.ok) {
+                await window.forge.saveFile({ defaultName: (mesh.label || 'body').replace(/[^\w.-]+/g, '_') + '.step', content: r.text, filters: [{ name: 'STEP', extensions: ['step', 'stp'] }] });
+                setKMsg({ kind: 'ok', text: `STEP exported — ${r.bytes.toLocaleString()} bytes` });
+              } else setKMsg({ kind: 'err', text: r.reason });
+              setKBusy(false);
+            }}>Export STEP</button>
+          </div>
+          {kEdges != null && <p className="muted small">{kEdges} addressable edges on this solid.</p>}
+          <p className="muted small">
+            Kernel operations replace the primitive with a baked solid — the sliders above stop
+            applying until you undo. {KERNEL_UNLOCKS[0]}.
+          </p>
+        </>
       )}
 
       <div className="divider" />
