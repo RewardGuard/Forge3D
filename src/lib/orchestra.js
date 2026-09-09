@@ -21,6 +21,8 @@
 // same validators (check_geometry / check_circuit / look).
 // ============================================================================
 import { useStore } from './store.js';
+import { classifyAiError, makeProvenance, AI_UNAVAILABLE } from './aiProvenance.js';
+import { evaluateReadiness } from './engineeringReport.js';
 import { parseAgentJson } from './agentJson.js';
 import { compactState, toolSpec, runTool, TOOLS } from './orchestraTools.js';
 import { captureViewportFresh } from './capture.js';
@@ -416,7 +418,14 @@ function validateFunctional(spec) {
 async function buildCircuitWithEscalation(spec) {
   const cPrompt = circuitPromptFromSpec(spec);
   const fPrompt = firmwarePromptFromSpec(spec);
-  for (const model of availableModels()) {
+  // Every model that drops out is recorded with a CLASSIFIED reason, so the UI
+  // can tell the user "your credits ran out" instead of a silent fallback.
+  const attempts = [];
+  const models = availableModels();
+  if (!models.length || (models.length === 1 && models[0] === 'base' && !S().hasCloudAccount)) {
+    attempts.push({ model: null, reason: AI_UNAVAILABLE.no_key.id, title: AI_UNAVAILABLE.no_key.title });
+  }
+  for (const model of models) {
     if (stopped()) return null;
     setDirectorPersist(model);
     useStore.getState().clearCircuit();
@@ -424,7 +433,12 @@ async function buildCircuitWithEscalation(spec) {
     act('use_model', { director: model }, { trying: model });
     const r = await runTool('build_circuit', { prompt: cPrompt }); // routed via provider: orchestraDirector
     S().orchestraAddTokens(1600);
-    if (!r.ok) { note(`${model}: circuit agent error — escalating to the next model.`); continue; }
+    if (!r.ok) {
+      const why = classifyAiError(r.error ?? r);
+      attempts.push({ model, reason: why.id, title: why.title, detail: String(r.error ?? '') });
+      note(`${model}: ${why.title} — escalating to the next model.`);
+      continue;
+    }
     act('build_circuit', { model }, r.result, true);
     const mcu = findMCU();
     if (mcu) { const g = await runTool('gen_code', { nodeId: mcu.id, prompt: fPrompt }); S().orchestraAddTokens(1800); act('gen_code', { model }, g.ok ? g.result : { error: g.error }, g.ok); }
@@ -432,19 +446,33 @@ async function buildCircuitWithEscalation(spec) {
     if (spec.isVehicle) assembleVehicle();
     const v = validateFunctional(spec);
     act('check_circuit', { model }, v);
-    if (v.ok) return { model, via: 'agent', v };
-    { const got = [v.leds && `LEDs ${v.leds}`, v.motors && `motors ${v.motors}`].filter(Boolean).join(', '); note(`${model}: the wiring didn't fully drive the outputs${got ? ` (${got})` : ''} — escalating to the next model.`); }
+    if (v.ok) {
+      const prov = makeProvenance('ai', { model, attempts });
+      S().orchestraSetProvenance(prov);
+      return { model, via: 'agent', v, provenance: prov };
+    }
+    {
+      const got = [v.leds && `LEDs ${v.leds}`, v.motors && `motors ${v.motors}`].filter(Boolean).join(', ');
+      attempts.push({ model, reason: AI_UNAVAILABLE.bad_output.id, title: AI_UNAVAILABLE.bad_output.title, detail: got });
+      note(`${model}: the wiring didn't fully drive the outputs${got ? ` (${got})` : ''} — escalating to the next model.`);
+    }
   }
-  // offline / every model failed → deterministic synthesizer (never fails)
-  note('No model produced a working circuit — falling back to the built-in synthesizer (offline-safe).');
+  // offline / every model failed → deterministic synthesizer.
+  // This still produces a correct circuit, but it is NOT AI work and the run
+  // is labelled accordingly all the way out to the UI.
+  const primary = attempts.find((a) => a.reason !== 'bad_output') || attempts[0] || null;
+  const reason = primary ? (AI_UNAVAILABLE[primary.reason] || AI_UNAVAILABLE.unknown) : AI_UNAVAILABLE.unknown;
+  note(`No AI model produced a working circuit (${reason.title}). Using the built-in deterministic synthesizer — this result is rule-based, not AI-generated.`);
   useStore.getState().clearCircuit();
   removeMountedParts();
   synthesizeCircuit(spec);
   mountByNetlist(spec);
   if (spec.isVehicle) assembleVehicle();
   const v = validateFunctional(spec);
-  act('check_circuit', { model: 'synth (offline)' }, v);
-  return { model: 'synth', via: 'synth', v };
+  act('check_circuit', { model: 'deterministic synthesizer (not AI)' }, v);
+  const prov = makeProvenance('deterministic', { reason, attempts });
+  S().orchestraSetProvenance(prov);
+  return { model: 'synth', via: 'synth', v, provenance: prov };
 }
 
 async function runStructurePipeline(goal, pattern, providedSpec) {
@@ -517,6 +545,24 @@ async function runStructurePipeline(goal, pattern, providedSpec) {
   const manufacturable = mfg.issues.length === 0;
   const conf = conforms(goal); // does it actually contain what the goal asked for?
   const ok = electricalOk && structuralOk && integrationOk && manufacturable && conf.ok;
+
+  // Staged engineering readiness. "manufacturable" above only means the DFM
+  // rules Forge3D can actually evaluate found nothing — it is NOT a
+  // manufacturing-ready verdict, and this ladder is what says so.
+  const readiness = evaluateReadiness({
+    spec,
+    geometry: { ok: structuralOk, issues: s2.issues.filter((i) => i.type === 'interference').map((i) => i.msg) },
+    simulation: { ran: hasMotors || hasInd, ok: electricalOk, issues: electricalOk ? [] : ['Outputs did not all respond in the visual simulation.'] },
+    structure: { ok: structuralOk, massG: s2.massG ?? null, issues: s2.issues.map((i) => i.msg || String(i)) },
+    manufacture: { printable: manufacturable, issues: mfg.issues.map((i) => i.msg || String(i)), warnings: mfg.warnings || [] },
+    process: 'fdm',
+  });
+  S().orchestraSetReadiness(readiness);
+  act('engineering_readiness', { process: 'fdm' }, {
+    reached: readiness.reachedLabel,
+    manufacturingReady: readiness.manufacturingReady,
+    blockers: readiness.blockers,
+  });
   const problems = [
     hasInd && ind.lit !== ind.total && `${ind.lit}/${ind.total} LEDs lit`,
     hasMotors && !mr.anyActive && 'motors don\'t run',

@@ -17,6 +17,9 @@
 // Run: node scripts/benchmark-full.mjs   (wired into `npm test`)
 // ============================================================================
 import assert from 'node:assert/strict';
+import * as U from '../src/lib/units.js';
+import * as ER from '../src/lib/engineeringReport.js';
+import * as AP from '../src/lib/aiProvenance.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -25,7 +28,7 @@ import { parseAgentJson } from '../src/lib/agentJson.js';
 import { buildNetlist, partsCatalog } from '../src/lib/netlist.js';
 import { numberedNodeNames } from '../src/lib/labels.js';
 import { scaleArr, packScale, avgScale } from '../src/lib/scaleUtil.js';
-import { MATERIALS, MATERIAL_KEYS, partMaterialKey, partMaterial } from '../src/lib/materials.js';
+import { MATERIALS, MATERIAL_KEYS, partMaterialKey, partMaterial, hasStructuralData, strengthLimit } from '../src/lib/materials.js';
 import {
   AMBIENT_C, HAZARD_LIST, resolveMaterial, estimateGeom,
   initLifeState, stepLifeState, glowColor, tempColor, statusLabel,
@@ -624,6 +627,232 @@ bench('validateStructure() 300 objects', 5, 400, () => {
   useStore.setState({ meshes: bigMeshes });
   validateStructure();
 });
+
+// ---------------------------------------------------------------------------
+section('12. UNITS — no artificial size cap, honest precision');
+
+check('parses mm, inches, feet-inches and fractions', () => {
+  assert.equal(U.parse('12.5'), 12.5);
+  assert.ok(Math.abs(U.parse('1.5in') - 38.1) < 1e-9);
+  assert.ok(Math.abs(U.parse("3'6\"") - 1066.8) < 1e-9);
+  assert.ok(Math.abs(U.parse('1/2 in') - 12.7) < 1e-9);
+  assert.ok(Math.abs(U.parse('1-1/2in') - 38.1) < 1e-9);
+  assert.ok(Math.abs(U.parse('5 thou') - 0.127) < 1e-9);
+});
+
+check('unit conversion round-trips without drift', () => {
+  for (const u of ['mm', 'cm', 'm', 'in', 'ft', 'thou', 'um']) {
+    const back = U.fromMm(U.toMm(123.456, u), u);
+    assert.ok(Math.abs(back - 123.456) < 1e-9, u);
+  }
+});
+
+check('garbage input returns NaN, never throws', () => {
+  for (const bad of ['', 'abc', null, undefined, {}, 'furlongs', '1/0 in', '--5']) {
+    const r = U.parse(bad);
+    assert.ok(Number.isNaN(r) || Number.isFinite(r), String(bad));
+  }
+});
+
+check('REGRESSION GUARD: dimensions above 400 mm are no longer clamped', () => {
+  // orchestraSpec used to clamp every dimension to 400 mm, silently turning a
+  // 1.8 m beam into a 400 mm stub. If this fails, that cap came back.
+  const spec = { intent: 'gantry', bodies: [{ id: 'beam', shape: 'box', dims_mm: { w: 1800, h: 120, d: 120 }, pos_mm: [0, 600, 0] }] };
+  const out = normalizeSpec(spec);
+  assert.equal(out.bodies[0].dims_mm.w, 1800, '1800 mm beam must survive normalization');
+  assert.equal(out.bodies[0].pos_mm[1], 600, '600 mm position must survive normalization');
+  assert.ok(!out.normalizationIssues, 'a valid large body must raise no issues');
+});
+
+check('industrial and micro scales both validate', () => {
+  assert.ok(U.validateDimension(12000).ok, '12 m');
+  assert.ok(U.validateDimension(0.05).ok, '50 µm');
+  assert.ok(!U.validateDimension(0).ok, 'zero must fail');
+  assert.ok(!U.validateDimension(NaN).ok, 'NaN must fail');
+  assert.ok(!U.validateDimension(1e12).ok, 'beyond float64 sub-µm must fail');
+});
+
+check('viewport profile adapts across 4 orders of magnitude', () => {
+  let lastGrid = 0;
+  for (const e of [2, 150, 1200, 12000]) {
+    const p = U.viewportProfile(e);
+    assert.ok(p.gridStepMm > lastGrid, 'grid must grow with the scene');
+    assert.ok(p.farMm / p.nearMm <= 1e6, 'depth range must stay within what a depth buffer can hold');
+    assert.ok(p.snapMm > 0 && Number.isFinite(p.snapMm));
+    lastGrid = p.gridStepMm;
+  }
+});
+
+// ---------------------------------------------------------------------------
+section('13. ENGINEERING READINESS — simulation is not manufacturing');
+
+check('a passing simulation alone NEVER yields manufacturing ready', () => {
+  const r = ER.evaluateReadiness({ spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] }, simulation: { ran: true, ok: true } });
+  assert.equal(r.manufacturingReady, false, 'this is the whole point of the ladder');
+  assert.ok(r.blockers.length >= 3, 'must list every unrun stage');
+});
+
+check('the ladder cannot skip a failed stage', () => {
+  const r = ER.evaluateReadiness({
+    spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] },
+    geometry: { ok: false, issues: ['bodies overlap'] },
+    simulation: { ran: true, ok: true },
+    structure: { ok: true, issues: [] },
+    manufacture: { printable: true, issues: [] },
+  });
+  assert.equal(r.manufacturingReady, false);
+  assert.equal(r.reachedStage, ER.STAGE.DESIGNED, 'must stop at the failed rung');
+});
+
+check('a full pass is PARTIAL, never an unqualified certification', () => {
+  const r = ER.evaluateReadiness({
+    spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] },
+    geometry: { ok: true, issues: [] }, simulation: { ran: true, ok: true },
+    structure: { ok: true, massG: 42, issues: [] }, manufacture: { printable: true, issues: [] },
+  });
+  assert.equal(r.manufacturingReady, true);
+  const last = r.stages.at(-1);
+  assert.equal(last.status, ER.STATUS.PARTIAL, 'never PASS — we cannot certify');
+  assert.ok(last.reasons.some((x) => /NOT a certification/i.test(x)));
+  assert.ok(last.reasons.some((x) => /qualified engineer/i.test(x)));
+});
+
+check('the Verified stage admits it has no FEA', () => {
+  const r = ER.evaluateReadiness({
+    spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] },
+    geometry: { ok: true, issues: [] }, simulation: { ran: true, ok: true },
+    structure: { ok: true, massG: 42, issues: [] },
+  });
+  const v = r.stages.find((x) => x.stage === ER.STAGE.VERIFIED);
+  assert.equal(v.status, ER.STATUS.PARTIAL);
+  assert.ok(v.reasons.some((x) => /no FEA solver/i.test(x)), 'must say stress was not evaluated');
+});
+
+check('the simulation stage is labelled visual, not engineering', () => {
+  const r = ER.evaluateReadiness({ spec: { bodies: [{ id: 'a', dims_mm: { w: 1, h: 1, d: 1 } }] }, simulation: { ran: true, ok: true } });
+  const sim = r.stages.find((x) => x.stage === ER.STAGE.SIMULATED);
+  assert.ok(sim.limitations.some((l) => /VISUAL PHYSICS/i.test(l)));
+});
+
+check('unsupported analyses explain themselves instead of returning a number', () => {
+  const un = ER.unsupportedCapabilities();
+  assert.ok(un.length >= 8, 'we are honest about a lot');
+  for (const c of un) {
+    assert.ok(c.reason && c.reason.length > 30, `${c.id} needs a real reason`);
+    assert.ok(c.wouldNeed, `${c.id} must say what it would take`);
+  }
+  assert.ok(un.some((c) => c.id === 'stress'));
+  assert.ok(un.some((c) => c.id === 'safety_factor'));
+});
+
+check('every process reports the rules it could not evaluate', () => {
+  for (const p of ER.processIds()) {
+    const r = ER.evaluateReadiness({
+      spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] },
+      geometry: { ok: true, issues: [] }, simulation: { ran: true, ok: true },
+      structure: { ok: true, issues: [] }, manufacture: { printable: true, issues: [] },
+      process: p,
+    });
+    const ma = r.stages.find((x) => x.stage === ER.STAGE.MANUFACTURING_ANALYSIS);
+    const skipped = ma.data.skipped || [];
+    for (const sk of skipped) {
+      assert.ok(ma.reasons.some((x) => x.includes(sk.id.replace(/_/g, ' '))), `${p}: must disclose skipped ${sk.id}`);
+    }
+  }
+});
+
+check('evaluateReadiness never throws on empty or hostile input', () => {
+  for (const arg of [undefined, {}, { spec: null }, { spec: { bodies: [] } }, { spec: {}, process: 'nonsense' }]) {
+    const r = ER.evaluateReadiness(arg);
+    assert.ok(r && Array.isArray(r.stages) && r.stages.length === 6);
+    assert.equal(typeof r.manufacturingReady, 'boolean');
+  }
+});
+
+// ---------------------------------------------------------------------------
+section('14. MATERIALS — real properties, honest caveats');
+
+check('every material carries full structural data', () => {
+  for (const k of MATERIAL_KEYS) assert.ok(hasStructuralData(k), `${k} missing structural properties`);
+});
+
+check('brittle materials report an ultimate basis, ductile ones yield', () => {
+  assert.equal(strengthLimit('aluminum').basis, 'yield');
+  assert.ok(/ultimate/.test(strengthLimit('resin').basis), 'resin has no yield point');
+  assert.ok(/ultimate/.test(strengthLimit('silicon').basis));
+});
+
+check('material assessment always states provenance and what it cannot do', () => {
+  for (const k of MATERIAL_KEYS) {
+    const a = ER.materialAssessment(k);
+    assert.ok(a.ok && a.grade, `${k} must name its grade`);
+    assert.ok(a.caveats.some((c) => /Not certified lot data/i.test(c)));
+    assert.ok(a.cannotCompute.some((c) => c.id === 'stress'));
+  }
+  assert.equal(ER.materialAssessment('unobtainium').ok, false);
+});
+
+check('printed plastics disclose layer anisotropy', () => {
+  for (const k of ['pla', 'abs', 'petg', 'nylon']) {
+    assert.ok(ER.materialAssessment(k).caveats.some((c) => /anisotropic/i.test(c)), k);
+  }
+});
+
+// ---------------------------------------------------------------------------
+section('15. AI PROVENANCE — a synthesizer may never wear the AI badge');
+
+check('classifies every provider failure mode', () => {
+  const cases = [
+    [{ status: 429, message: 'Rate limit reached' }, 'rate_limit'],
+    [{ status: 429, message: 'You exceeded your current quota, check billing' }, 'no_credits'],
+    [{ status: 402, message: 'Insufficient credits' }, 'no_credits'],
+    [{ status: 401, message: 'Invalid API key' }, 'auth'],
+    [{ status: 403, message: 'Forbidden' }, 'auth'],
+    [{ message: 'fetch failed' }, 'network'],
+    [{ status: 503, message: 'Overloaded' }, 'server_error'],
+    [{ message: 'No API key configured' }, 'no_key'],
+    [{ status: 404, message: 'model x not found' }, 'model_unavailable'],
+  ];
+  for (const [err, want] of cases) assert.equal(AP.classifyAiError(err).id, want, JSON.stringify(err));
+});
+
+check('classifier never throws and always names an action', () => {
+  for (const bad of [null, undefined, '', 0, {}, [], 'weird', new Error('boom')]) {
+    const r = AP.classifyAiError(bad);
+    assert.ok(r.id && r.title && r.explain);
+    assert.ok(Array.isArray(r.actions) && r.actions.length > 0, 'user must always have an option');
+  }
+});
+
+check('deterministic results are never reported as AI', () => {
+  const p = AP.makeProvenance('deterministic', { reason: AP.AI_UNAVAILABLE.no_credits, model: 'anthropic' });
+  assert.equal(p.usedAi, false);
+  assert.equal(p.model, null, 'a non-AI result must not carry a model name');
+  assert.ok(AP.shouldWarnNoAi(p));
+  assert.ok(/AI unavailable/.test(AP.provenanceSummary(p)));
+});
+
+check('preset results are labelled as presets', () => {
+  const p = AP.makeProvenance('preset');
+  assert.equal(p.usedAi, false);
+  assert.ok(/preset/i.test(p.label));
+  assert.ok(/No AI reasoning/i.test(p.detail));
+});
+
+check('only genuine AI runs carry the model and clear the warning', () => {
+  const p = AP.makeProvenance('ai', { model: 'anthropic' });
+  assert.equal(p.usedAi, true);
+  assert.equal(p.model, 'anthropic');
+  assert.equal(AP.shouldWarnNoAi(p), false);
+});
+
+check('every unavailability reason offers a way forward', () => {
+  for (const [id, r] of Object.entries(AP.AI_UNAVAILABLE)) {
+    assert.ok(r.actions.length >= 2, `${id} needs alternatives`);
+    assert.ok(r.actions.some((a) => /deterministic|manual|local/i.test(a)), `${id} must offer a non-AI path`);
+  }
+});
+
 
 // ---------------------------------------------------------------------------
 console.log('\n' + '─'.repeat(64));

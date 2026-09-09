@@ -1,4 +1,6 @@
 import React, { useEffect, useRef } from 'react';
+import { provenanceSummary, shouldWarnNoAi } from '../lib/aiProvenance.js';
+import { STATUS } from '../lib/engineeringReport.js';
 import { useStore } from '../lib/store.js';
 import { runOrchestra, stopOrchestra, BUDGET } from '../lib/orchestra.js';
 import Viewport3D from './Viewport3D.jsx';
@@ -107,6 +109,75 @@ function StepCard({ step }) {
   );
 }
 
+// Who actually built this. Orchestra used to end "done ✓" whether a model
+// reasoned about the design or a deterministic synthesizer filled in offline.
+// The user is told which, every time.
+export function ProvenanceBanner({ prov }) {
+  if (!prov) return null;
+  const warn = shouldWarnNoAi(prov);
+  return (
+    <div className={`orc-prov ${warn ? 'warn' : 'ai'}`}>
+      <div className="orc-prov-head">
+        <span className="orc-prov-badge">{prov.short}</span>
+        <span className="orc-prov-title">{provenanceSummary(prov)}</span>
+      </div>
+      <p className="orc-prov-detail">{prov.detail}</p>
+      {prov.unavailable && (
+        <div className="orc-prov-why">
+          <b>{prov.unavailable.title}</b>
+          <p>{prov.unavailable.explain}</p>
+          <ul>{prov.unavailable.actions.map((a, i) => <li key={i}>{a}</li>)}</ul>
+        </div>
+      )}
+      {prov.attempts?.length > 0 && (
+        <details className="orc-prov-attempts">
+          <summary>{prov.attempts.length} model attempt{prov.attempts.length === 1 ? '' : 's'}</summary>
+          {prov.attempts.map((a, i) => (
+            <div key={i} className="orc-prov-attempt">
+              <span>{a.model || 'no provider'}</span><span>{a.title}</span>
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+
+const STATUS_MARK = {
+  [STATUS.PASS]: '✓', [STATUS.PARTIAL]: '◐', [STATUS.FAIL]: '✕',
+  [STATUS.NOT_RUN]: '·', [STATUS.NOT_SUPPORTED]: '—',
+};
+
+// The staged ladder. "Manufacturing ready" is never granted by simulating.
+export function ReadinessLadder({ readiness }) {
+  if (!readiness) return null;
+  return (
+    <div className="orc-ready">
+      <div className="orc-ready-head">
+        <b>Engineering readiness</b>
+        <span className="muted small">{readiness.processName}</span>
+      </div>
+      {readiness.stages.map((st) => (
+        <details key={st.stage} className={`orc-stage ${st.status}`}>
+          <summary>
+            <span className="orc-stage-mark">{STATUS_MARK[st.status] || '·'}</span>
+            <span className="orc-stage-label">{st.label}</span>
+            <span className="orc-stage-status">{st.status.replace('_', ' ')}</span>
+          </summary>
+          {st.reasons.map((r, i) => <p key={i} className="orc-stage-reason">{r}</p>)}
+          {st.method && <p className="orc-stage-method"><b>Method:</b> {st.method}</p>}
+          {st.confidence && <p className="orc-stage-method"><b>Confidence:</b> {st.confidence}</p>}
+          {st.limitations?.length > 0 && (
+            <ul className="orc-stage-limits">
+              {st.limitations.map((l, i) => <li key={i}>{l}</li>)}
+            </ul>
+          )}
+        </details>
+      ))}
+    </div>
+  );
+}
+
 export default function OrchestraPanel() {
   const status = useStore((s) => s.orchestraStatus);
   const goal = useStore((s) => s.orchestraGoal);
@@ -123,6 +194,8 @@ export default function OrchestraPanel() {
   const setSimReport = useStore((s) => s.setSimReport);
   const theme = useStore((s) => s.theme);
   const meshCount = useStore((s) => s.meshes.length);
+  const provenance = useStore((s) => s.orchestraProvenance);
+  const readiness = useStore((s) => s.orchestraReadiness);
 
   const [draft, setDraft] = React.useState(goal || EXAMPLES[0]);
   const running = status === 'running';
@@ -144,7 +217,10 @@ export default function OrchestraPanel() {
   }
 
   const statusLabel = {
-    idle: 'ready', running: 'working…', done: 'done ✓', stopped: 'stopped', error: 'error',
+    idle: 'ready', running: 'working…',
+    // "done" alone implied Orchestra AI did the work. When it did not, say so.
+    done: provenance && !provenance.usedAi ? 'built without AI' : 'done ✓',
+    stopped: 'stopped', error: 'error',
   }[status] || status;
 
   return (
@@ -229,6 +305,8 @@ export default function OrchestraPanel() {
 
       {/* the timeline still streams alongside, for the detail */}
       <aside className="orc-timeline">
+        <ProvenanceBanner prov={provenance} />
+        <ReadinessLadder readiness={readiness} />
         <div className="orc-log" ref={logRef}>
           {steps.length === 0 ? (
             <p className="muted small" style={{ padding: 12 }}>The director's plan, tool calls, validations and screenshots stream here as it works.</p>

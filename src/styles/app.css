@@ -799,3 +799,43 @@ select:hover { border-color: var(--hover-border); }
 .ad-cta:hover { background: var(--accent); color: #fff; }
 
 @media (max-width: 640px) { .onb-perks { grid-template-columns: 1fr; } }
+
+/* ── Orchestra provenance + engineering readiness ─────────────────────── */
+/* A run must never look like AI work when a synthesizer produced it. */
+.orc-prov { margin: 8px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); }
+.orc-prov.ai   { border-color: #3b82f6; background: color-mix(in srgb, #3b82f6 8%, transparent); }
+.orc-prov.warn { border-color: #d97706; background: color-mix(in srgb, #d97706 10%, transparent); }
+.orc-prov-head { display: flex; align-items: center; gap: 8px; }
+.orc-prov-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); white-space: nowrap; }
+.orc-prov.ai .orc-prov-badge   { border-color: #3b82f6; color: #3b82f6; }
+.orc-prov.warn .orc-prov-badge { border-color: #d97706; color: #d97706; }
+.orc-prov-title { font-size: 12px; font-weight: 600; }
+.orc-prov-detail { margin: 6px 0 0; font-size: 11.5px; opacity: .85; line-height: 1.45; }
+.orc-prov-why { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11.5px; }
+.orc-prov-why p { margin: 3px 0; opacity: .85; }
+.orc-prov-why ul { margin: 6px 0 0; padding-left: 18px; }
+.orc-prov-why li { margin: 2px 0; opacity: .9; }
+.orc-prov-attempts { margin-top: 8px; font-size: 11px; }
+.orc-prov-attempts summary { cursor: pointer; opacity: .75; }
+.orc-prov-attempt { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; opacity: .8; }
+
+.orc-ready { margin: 8px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.orc-ready-head { display: flex; justify-content: space-between; align-items: baseline;
+  padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12px; }
+.orc-stage { border-bottom: 1px solid var(--line); }
+.orc-stage:last-child { border-bottom: 0; }
+.orc-stage > summary { display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+  cursor: pointer; font-size: 12px; list-style: none; }
+.orc-stage > summary::-webkit-details-marker { display: none; }
+.orc-stage-mark { width: 14px; text-align: center; font-weight: 700; }
+.orc-stage-label { flex: 1; }
+.orc-stage-status { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; }
+.orc-stage.pass  .orc-stage-mark { color: #16a34a; }
+.orc-stage.partial .orc-stage-mark { color: #d97706; }
+.orc-stage.fail  .orc-stage-mark { color: #dc2626; }
+.orc-stage.not_run, .orc-stage.not_supported { opacity: .55; }
+.orc-stage-reason { margin: 0 12px 6px 34px; font-size: 11.5px; line-height: 1.45; }
+.orc-stage-method { margin: 0 12px 6px 34px; font-size: 11px; opacity: .75; line-height: 1.4; }
+.orc-stage-limits { margin: 0 12px 8px 34px; padding-left: 16px; font-size: 11px; opacity: .7; }
+.orc-stage-limits li { margin: 2px 0; line-height: 1.4; }

@@ -99,8 +99,15 @@ export const useStore = create((set, get) => ({
   orchestraTokens: 0, // rough token estimate spent this run (headroom meter)
   orchestraView: 'build', // build | sim — which live viewport the Orchestra stage shows
   orchestraPhase: '',     // current phase, shown as a live banner over the viewport
+  // Who actually produced the last run (AI / preset / deterministic) and why,
+  // plus the staged engineering readiness ladder. Both are rendered — a run
+  // must never look like AI work when a synthesizer did it.
+  orchestraProvenance: null,
+  orchestraReadiness: null,
   setOrchestraView: (orchestraView) => set({ orchestraView }),
   setOrchestraPhase: (orchestraPhase) => set({ orchestraPhase }),
+  orchestraSetProvenance: (orchestraProvenance) => set({ orchestraProvenance }),
+  orchestraSetReadiness: (orchestraReadiness) => set({ orchestraReadiness }),
   orchestraDirector: 'base',     // text provider that plans (free by default)
   orchestraVision: 'hf-glm45v',  // vision model that inspects screenshots
   orchestraHeadroom: 'balanced', // eco | balanced | max — token/context budget
@@ -126,9 +133,9 @@ export const useStore = create((set, get) => ({
     set((s) => ({ bridgeEnabled, bridgeRunning: bridgeRunning ?? s.bridgeRunning })),
   setBridgeToken: (bridgeToken) => set({ bridgeToken: bridgeToken || '', hasBridgeToken: Boolean(bridgeToken) }),
   orchestraStart: (goal) =>
-    set({ orchestraStatus: 'running', orchestraGoal: goal || '', orchestraSteps: [], orchestraTokens: 0, orchestraView: 'build', orchestraPhase: 'Planning…' }),
+    set({ orchestraStatus: 'running', orchestraGoal: goal || '', orchestraSteps: [], orchestraTokens: 0, orchestraProvenance: null, orchestraReadiness: null, orchestraView: 'build', orchestraPhase: 'Planning…' }),
   orchestraSetStatus: (orchestraStatus) => set({ orchestraStatus }),
-  orchestraReset: () => set({ orchestraStatus: 'idle', orchestraGoal: '', orchestraSteps: [], orchestraTokens: 0 }),
+  orchestraReset: () => set({ orchestraStatus: 'idle', orchestraGoal: '', orchestraSteps: [], orchestraTokens: 0, orchestraProvenance: null, orchestraReadiness: null }),
   orchestraAddTokens: (n) => set((s) => ({ orchestraTokens: s.orchestraTokens + (Number(n) || 0) })),
   orchestraAddStep: (step) =>
     set((s) => ({ orchestraSteps: [...s.orchestraSteps, { n: s.orchestraSteps.length + 1, t: Date.now(), ...step }] })),
