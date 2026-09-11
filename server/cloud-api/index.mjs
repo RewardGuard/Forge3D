@@ -16,6 +16,8 @@
 //   POST /auth/login          { email, password } → { token, account }
 //   GET  /me                  (auth) → { email, plan, usage, billing }
 //   POST /v1/chat             (auth) { system, user, maxTokens, provider? }
+//   POST /v1/vision           (auth) { prompt, imageDataUrl }   — GLM-4.5V via the HF router, server-held HF_TOKEN
+//   POST /v1/hf-generate      (auth) { prompt, seed, guidance, steps } — text-to-3D Space, server-held HF_TOKEN
 //   POST /billing/checkout    (auth) → { url }   Stripe Checkout ($5/mo)
 //   POST /billing/portal      (auth) → { url }   Stripe customer portal
 //   POST /billing/webhook     Stripe events (signature-verified)
@@ -64,6 +66,20 @@ const PROVIDERS = [
   { id: 'openrouter', env: 'OPENROUTER_KEY', kind: 'openai', url: 'https://openrouter.ai/api/v1/chat/completions', model: 'meta-llama/llama-3.3-70b-instruct:free', extra: { 'HTTP-Referer': 'https://forge3d.app', 'X-Title': 'Forge3D' } },
 ];
 const available = () => PROVIDERS.filter((p) => process.env[p.env]);
+
+// ---- Hugging Face, server-held ----
+// Vision (Orchestra's "look") and text-to-3D used to need the user's own HF
+// token. A Forge3D Cloud account should be able to do everything, so the
+// server holds one token and proxies both on the account's behalf.
+const HF_TOKEN = process.env.HF_TOKEN || '';
+const HF_ROUTER_URL = 'https://router.huggingface.co/v1/chat/completions';
+const HF_VISION_MODEL = process.env.HF_VISION_MODEL || 'zai-org/GLM-4.5V';
+const HF_SPACE = process.env.HF_SPACE || 'https://tencent-hunyuan3d-2.hf.space';
+const HF_FN = process.env.HF_FN || '/call/shape_generation';
+// A vision call is priced as a fixed token estimate: the image itself is not
+// text, but it is real inference cost and must count against the allowance.
+const VISION_TOKEN_COST = Number(process.env.VISION_TOKEN_COST) || 1200;
+const HF3D_TOKEN_COST = Number(process.env.HF3D_TOKEN_COST) || 2500;
 const pickProvider = (id) => (id ? available().find((p) => p.id === id) : available()[0]);
 
 // ---- atomic JSON store ----
@@ -299,7 +315,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === 'GET' && url.pathname === '/health') {
-      return send(res, 200, { ok: true, providers: available().map((p) => p.id), billing: billingConfigured(), storageBilling: storageBillingConfigured(), accounts: true, provider: available()[0]?.id || null, configured: available().length > 0 });
+      return send(res, 200, { ok: true, providers: available().map((p) => p.id), billing: billingConfigured(), storageBilling: storageBillingConfigured(), vision: Boolean(HF_TOKEN), textTo3d: Boolean(HF_TOKEN), accounts: true, provider: available()[0]?.id || null, configured: available().length > 0 });
     }
 
     if (req.method === 'GET' && url.pathname === '/billing/done') {
@@ -468,6 +484,82 @@ const server = http.createServer(async (req, res) => {
       addUsage(email, tokens);
       console.log(`[chat] ${p.id} ${tokens}tok ${Date.now() - t0}ms plan=${a.plan}`);
       return send(res, 200, { text, provider: p.id, model: p.model, tokens, usage: { used: usageOf(email), limit } });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/v1/vision') {
+      if (!HF_TOKEN) return send(res, 503, { error: 'Vision is not configured on this server (HF_TOKEN missing).', code: 'vision_unavailable' });
+      if (!body?.imageDataUrl) return send(res, 400, { error: 'imageDataUrl is required' });
+      const a = db.accounts[email];
+      const limit = limitOf(a);
+      const used = usageOf(email) + reservedOf(email);
+      if (used + VISION_TOKEN_COST > limit) {
+        return send(res, 402, {
+          error: a.plan === 'pro'
+            ? `You hit this month's fair-use cap (${limit.toLocaleString()} tokens).`
+            : `Vision needs ${VISION_TOKEN_COST.toLocaleString()} tokens and you have ${Math.max(0, limit - used).toLocaleString()} free tokens left. Upgrade to Pro for all F3D Cloud AI.`,
+          code: 'upgrade_required', used: usageOf(email), limit,
+        });
+      }
+      reserve(email, VISION_TOKEN_COST);
+      const t0 = Date.now();
+      try {
+        const r = await upstreamFetch(HF_ROUTER_URL, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${HF_TOKEN}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model: HF_VISION_MODEL,
+            max_tokens: Math.min(Number(body.maxTokens) || 600, 1200),
+            messages: [{ role: 'user', content: [
+              { type: 'text', text: String(body.prompt || 'Describe the image and whether it matches the described goal.') },
+              { type: 'image_url', image_url: { url: String(body.imageDataUrl) } },
+            ] }],
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) return send(res, 502, { error: data?.error?.message || `vision upstream ${r.status}` });
+        const text = data?.choices?.[0]?.message?.content || '';
+        const tokens = Number(data?.usage?.total_tokens) || VISION_TOKEN_COST;
+        addUsage(email, tokens);
+        console.log(`[vision] ${HF_VISION_MODEL} ${tokens}tok ${Date.now() - t0}ms plan=${a.plan}`);
+        return send(res, 200, { text, model: HF_VISION_MODEL, tokens, usage: { used: usageOf(email), limit } });
+      } finally {
+        release(email, VISION_TOKEN_COST);
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/v1/hf-generate') {
+      if (!HF_TOKEN) return send(res, 503, { error: 'Text-to-3D is not configured on this server (HF_TOKEN missing).', code: 'hf_unavailable' });
+      if (!body?.prompt) return send(res, 400, { error: 'prompt is required' });
+      const a = db.accounts[email];
+      const limit = limitOf(a);
+      const used = usageOf(email) + reservedOf(email);
+      if (used + HF3D_TOKEN_COST > limit) {
+        return send(res, 402, { error: `Text-to-3D costs ${HF3D_TOKEN_COST.toLocaleString()} tokens; you have ${Math.max(0, limit - used).toLocaleString()} left.`, code: 'upgrade_required', used: usageOf(email), limit });
+      }
+      reserve(email, HF3D_TOKEN_COST);
+      const t0 = Date.now();
+      try {
+        const headers = { authorization: `Bearer ${HF_TOKEN}`, 'content-type': 'application/json' };
+        const post = await upstreamFetch(`${HF_SPACE}${HF_FN}`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ data: [String(body.prompt), Number(body.seed) || 0, Number(body.guidance) || 15.0, Number(body.steps) || 32] }),
+        });
+        if (!post.ok) return send(res, 502, { error: `HF Space submit failed (${post.status})` });
+        const { event_id } = await post.json().catch(() => ({}));
+        if (!event_id) return send(res, 502, { error: 'No event_id from the Space.' });
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 240000);
+        let text;
+        try {
+          const stream = await upstreamFetch(`${HF_SPACE}${HF_FN}/${event_id}`, { headers: { authorization: `Bearer ${HF_TOKEN}` }, signal: ac.signal });
+          text = await stream.text();
+        } finally { clearTimeout(timer); }
+        addUsage(email, HF3D_TOKEN_COST);
+        console.log(`[hf3d] ${Date.now() - t0}ms plan=${a.plan}`);
+        return send(res, 200, { raw: text, tokens: HF3D_TOKEN_COST, usage: { used: usageOf(email), limit } });
+      } finally {
+        release(email, HF3D_TOKEN_COST);
+      }
     }
 
     return send(res, 404, { error: 'not found' });

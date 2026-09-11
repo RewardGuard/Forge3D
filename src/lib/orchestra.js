@@ -388,13 +388,16 @@ async function genericLoop(goal, headroom) {
 // models WITHOUT pasting a key, so those count as available too.
 function availableModels() {
   const s = S();
-  const entitled = Boolean(s.entitled || s.me?.plan === 'pro' || s.me?.trial?.active);
+  // Any Forge3D Cloud account reaches the cloud-served models — the free plan
+  // has a monthly token allowance, not a smaller model list. Gating this on
+  // "pro" made a fresh signup look like it had no AI at all.
+  const hasAccount = Boolean(s.me?.hasAccount || s.me?.email);
   const ranked = [
-    ['anthropic', s.hasAnthropicKey || entitled],
-    ['gemini', s.hasGeminiKey || entitled],
-    ['groq', s.hasGroqKey || entitled],
-    ['glm', s.hasGlmKey || entitled],
-    ['mistral', s.hasMistralKey || entitled],
+    ['anthropic', s.hasAnthropicKey || hasAccount],
+    ['gemini', s.hasGeminiKey || hasAccount],
+    ['groq', s.hasGroqKey || hasAccount],
+    ['glm', s.hasGlmKey || hasAccount],
+    ['mistral', s.hasMistralKey || hasAccount],
     ['openrouter', s.hasOpenrouterKey],
   ];
   const list = ranked.filter(([, k]) => k).map(([m]) => m);
@@ -413,14 +416,15 @@ export function modelRoute(id) {
   }[id];
   if (ownKey) return { reachable: true, via: 'your API key', detail: 'Billed to your own provider account.' };
 
-  const entitled = Boolean(s.entitled || s.me?.plan === 'pro' || s.me?.trial?.active);
+  const hasAccount = Boolean(s.me?.hasAccount || s.me?.email);
+  const plan = s.me?.plan === 'pro' ? 'Pro' : s.me?.trial?.active ? 'trial' : 'free';
   const cloudServed = ['anthropic', 'gemini', 'groq', 'glm', 'mistral'].includes(id);
-  if (id === 'base') return { reachable: true, via: 'Forge3D Cloud', detail: 'Free base model, no key needed.' };
-  if (cloudServed && entitled) {
-    return { reachable: true, via: 'Forge3D Cloud (your plan)', detail: 'Served by Forge3D Cloud on your subscription — no API key needed.' };
+  if (id === 'base') return { reachable: true, via: 'Forge3D Cloud', detail: 'Claude by default, on your account allowance.' };
+  if (cloudServed && hasAccount) {
+    return { reachable: true, via: `Forge3D Cloud (${plan})`, detail: `Served by Forge3D Cloud on your ${plan} allowance — no API key needed.` };
   }
   if (cloudServed) {
-    return { reachable: false, via: null, detail: 'Needs either your own API key or a Forge3D Cloud plan.', fix: 'upgrade_or_key' };
+    return { reachable: false, via: null, detail: 'Sign in to Forge3D Cloud (free) or add your own API key.', fix: 'signin_or_key' };
   }
   return { reachable: false, via: null, detail: 'Needs your own API key.', fix: 'key' };
 }

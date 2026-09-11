@@ -232,7 +232,7 @@ ipcMain.handle('config:get', () => {
     // ---- F3D Cloud account (free 5k tokens/month, or Pro $5/month) ----
     hasAccount: Boolean(cfg.accountToken),
     accountEmail: cfg.accountEmail || '',
-    cloudAi: cfg.cloudAi || 'glm', // which cloud AI 'base' uses (glm free-tier default)
+    cloudAi: cfg.cloudAi || 'claude', // which cloud AI 'base' uses — Claude by default, for every plan
     // ---- first-run onboarding flags ----
     onboarded: Boolean(cfg.onboarded),
     tutorialSeen: Boolean(cfg.tutorialSeen),
@@ -381,7 +381,7 @@ function writeTrialLock(data) {
 ipcMain.handle('device:fingerprint', () => ({ deviceId: deviceFingerprint() }));
 ipcMain.handle('config:setCloudAi', (_e, cloudAi) => {
   const cfg = readConfig();
-  cfg.cloudAi = String(cloudAi || 'glm');
+  cfg.cloudAi = String(cloudAi || 'claude');
   writeConfig(cfg);
   return { cloudAi: cfg.cloudAi };
 });
@@ -576,6 +576,18 @@ function parseGradioSse(text) {
 ipcMain.handle('hf:generate', async (_e, payload) => {
   const cfg = readConfig();
   const token = cfg.hfToken;
+  // Cloud fallback: the server runs the Space with its own token and bills
+  // the account's allowance.
+  if (!token && cfg.accountToken) {
+    const r = await fetch(`${PROXY_URL}/v1/hf-generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.accountToken}` },
+      body: JSON.stringify({ prompt: payload.prompt, seed: payload.seed ?? 0, guidance: payload.guidance ?? 15.0, steps: payload.steps ?? 32 }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data?.error || `Forge3D Cloud text-to-3D error ${r.status}`);
+    return parseGradioSse(data.raw);
+  }
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -668,7 +680,7 @@ async function proxyGenerate({ system, userText, maxTokens = 2000, provider = nu
   const res = await fetch(`${PROXY_URL}/v1/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.accountToken}` },
-    body: JSON.stringify({ system, user: userText, maxTokens, provider: provider || cfg.cloudAi || 'glm' }),
+    body: JSON.stringify({ system, user: userText, maxTokens, provider: provider || cfg.cloudAi || 'claude' }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `Forge3D Cloud error ${res.status}`);
@@ -983,6 +995,19 @@ ipcMain.handle('orchestra:think', async (_e, { system, userText, maxTokens = 120
 // car? are the wheels on the ground?"). Needs the user's free HF token.
 ipcMain.handle('orchestra:vision', async (_e, { prompt, imageDataUrl } = {}) => {
   const cfg = readConfig();
+  // No personal HF token but a Forge3D Cloud account: the server holds a token
+  // and serves vision on the account's allowance. This is what lets a Cloud
+  // account "do everything" without pasting keys.
+  if (!cfg.hfToken && cfg.accountToken) {
+    const r = await fetch(`${PROXY_URL}/v1/vision`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.accountToken}` },
+      body: JSON.stringify({ prompt, imageDataUrl, maxTokens: 600 }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data?.error || `Forge3D Cloud vision error ${r.status}`);
+    return { text: data.text || '', model: data.model, mock: false, via: 'forge3d-cloud' };
+  }
   if (!cfg.hfToken) {
     return {
       text: 'Vision check skipped — add a free Hugging Face token in Settings so Orchestra can SEE the design with GLM-4.5V.',

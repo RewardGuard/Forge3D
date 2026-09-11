@@ -15,8 +15,8 @@ const QUALITIES = [
 
 // ---- F3D Cloud account: free 5k tokens/month on any cloud AI, or Pro $5/month ----
 const CLOUD_AIS = [
-  { id: 'glm', label: 'GLM 4.5 Flash (free tier)' },
-  { id: 'claude', label: 'Claude (Pro)' },
+  { id: 'claude', label: 'Claude (default)' },
+  { id: 'glm', label: 'GLM 4.5 Flash' },
   { id: 'groq', label: 'Llama 3.3 70B · Groq' },
   { id: 'gemini', label: 'Gemini 2.0 Flash' },
   { id: 'mistral', label: 'Codestral · Mistral' },
@@ -28,11 +28,11 @@ function AccountSection({ open }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
-  const [cloudAi, setCloudAi] = useState('glm');
+  const [cloudAi, setCloudAi] = useState('claude');
 
   const refresh = () => {
     window.forge.account?.me().then(setMe).catch(() => setMe({ hasAccount: false }));
-    window.forge.config.get().then((c) => setCloudAi(c.cloudAi || 'glm')).catch(() => {});
+    window.forge.config.get().then((c) => setCloudAi(c.cloudAi || 'claude')).catch(() => {});
   };
   useEffect(() => { if (open) { setMsg(''); refresh(); } }, [open]);
 
@@ -179,8 +179,8 @@ export default function SettingsButton() {
   // --- code (AI) providers, data-driven ---
   const CODE_PROVIDERS = [
     {
-      id: 'base', name: 'Forge3D Cloud', tag: 'FREE', model: 'base model · no key',
-      note: 'Use the built-in base model — works out of the box, no account or API key. Powered by a shared Forge3D server. Pick a provider below to use your own model instead.',
+      id: 'base', name: 'Forge3D Cloud', tag: 'FREE', model: 'Claude · no key needed',
+      note: 'Claude, served by Forge3D Cloud on your account. A free account includes a monthly allowance; Pro raises it. Change the cloud model in the account card, or pick a provider below to use your own key.',
       noKey: true,
     },
     {
