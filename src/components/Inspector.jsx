@@ -4,6 +4,7 @@ import { scaleArr, packScale, avgScale } from '../lib/scaleUtil.js';
 import { isRoundable, maxCornerRadiusMm, validateCornerRadius, trueDimsMm, CORNER_STYLES, ROUNDABLE } from '../lib/rounding.js';
 import { runKernelOp, kernelSupports, edgeCount, meshToSTEP } from '../lib/kernelBridge.js';
 import { kernelStatus, KERNEL_UNLOCKS } from '../lib/kernel.js';
+import { ScreenPreview } from './ScreenFace.jsx';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 const AXES = ['x', 'y', 'z'];
@@ -206,6 +207,7 @@ export default function Inspector() {
       {mesh.kind === 'part' && mesh.mm && (
         <p className="muted small">Footprint: {mesh.mm[0].toFixed(0)}×{mesh.mm[2].toFixed(0)}×{mesh.mm[1].toFixed(0)} mm (real scale)</p>
       )}
+      {mesh.kind === 'part' && <ScreenPreview mesh={mesh} />}
 
       {/* ── B-rep kernel ────────────────────────────────────────────────
           These operations run in OpenCascade, on a real solid with real edge

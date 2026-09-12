@@ -23,6 +23,7 @@ import * as AP from '../src/lib/aiProvenance.js';
 import * as MC from '../src/lib/modelContext.js';
 import * as CI from '../src/lib/cadIntent.js';
 import * as RD from '../src/lib/rounding.js';
+import * as SS from '../src/lib/screenSim.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -1110,6 +1111,125 @@ check('edge-selection fillet is still refused, and points at round_corners', () 
   assert.equal(p.ok, false);
   assert.ok(/B-rep/.test(p.reason));
   assert.ok(p.alternatives.some((a) => /round_corners/.test(a)), 'must name the thing that DOES work');
+});
+
+// ---------------------------------------------------------------------------
+section('18. DISPLAY SIMULATION — screens show what the firmware draws');
+
+const OLED = `
+  #include <Adafruit_SSD1306.h>
+  int temp = 23; int pct = 70;
+  void setup(){ display.begin(SSD1306_SWITCHCAPVCC, 0x3C); }
+  void loop(){
+    display.clearDisplay();
+    display.setTextSize(2); display.setCursor(0,0);
+    display.print("Temp: "); display.print(temp); display.println("C");
+    display.drawRect(0, 40, 128, 20, WHITE);
+    display.fillRect(2, 42, map(temp,0,50,0,124), 16, WHITE);
+    display.display();
+  }`;
+
+check('an OLED sketch renders real lit pixels', () => {
+  const r = SS.renderScreen('oled-ssd1306', OLED, {});
+  assert.ok(r.ok);
+  assert.equal(r.fb.w, 128); assert.equal(r.fb.h, 64);
+  assert.ok(r.fb.litCount() > 500, `only ${r.fb.litCount()} lit`);
+  assert.ok(r.calls >= 8);
+});
+
+check('variables resolve from the firmware\'s own declarations', () => {
+  const r = SS.renderScreen('oled-ssd1306', OLED, SS.extractDeclaredValues(OLED));
+  const bar = SS.renderScreen('oled-ssd1306', OLED, { temp: 0 });
+  assert.ok(r.fb.litCount() > bar.fb.litCount(), 'temp=23 must draw a longer bar than temp=0');
+});
+
+check('map() and arithmetic are evaluated, never eval\'d unsafely', () => {
+  const code = 'void loop(){ display.fillRect(0,0, map(x,0,100,0,128), 8, 1); }';
+  const a = SS.renderScreen('oled-ssd1306', code, { x: 50 });
+  const b = SS.renderScreen('oled-ssd1306', code, { x: 100 });
+  assert.ok(b.fb.litCount() > a.fb.litCount() * 1.8, 'x=100 must fill ~2× x=50');
+  // an injection attempt is NOT executed
+  const evil = 'void loop(){ display.fillRect(0,0, (globalThis.pwned=1,128), 8, 1); }';
+  SS.renderScreen('oled-ssd1306', evil, {});
+  assert.equal(globalThis.pwned, undefined, 'expression evaluator must not run arbitrary code');
+});
+
+check('an unresolvable variable renders as [name], not a guess', () => {
+  const r = SS.renderScreen('lcd1602', 'void loop(){ lcd.setCursor(0,0); lcd.print(humidity); }', {});
+  assert.ok(r.text[0].startsWith('[humidity]'), r.text[0]);
+});
+
+check('a character LCD lays text in cells', () => {
+  const r = SS.renderScreen('lcd1602', 'void setup(){ lcd.begin(16,2); lcd.print("Hello"); lcd.setCursor(0,1); lcd.print("World"); }', {});
+  assert.equal(r.text[0].trim(), 'Hello');
+  assert.equal(r.text[1].trim(), 'World');
+  assert.equal(r.text[0].length, 16, 'row must be exactly 16 cells');
+});
+
+check('text past the LCD edge is clipped, not wrapped', () => {
+  const r = SS.renderScreen('lcd1602', 'void loop(){ lcd.print("THIS IS FAR TOO LONG FOR 16"); }', {});
+  assert.equal(r.text[0], 'THIS IS FAR TOO ');
+  assert.equal(r.text[1].trim(), '', 'overflow must not spill to row 2');
+});
+
+check('a 7-segment shows the number it was given', () => {
+  const r = SS.renderScreen('seven-seg', 'void loop(){ display.showNumberDec(rpm); }', { rpm: 1450 });
+  assert.equal(r.text[0].trim(), '1450');
+});
+
+check('RGB565 and named colours parse on a colour TFT', () => {
+  const r = SS.renderScreen('tft-28-spi', 'void loop(){ tft.fillScreen(ILI9341_BLACK); tft.fillRect(0,0,10,10,0xF800); tft.fillRect(20,0,10,10,ILI9341_GREEN); }', {});
+  const [r1] = r.fb.get(5, 5); const [, g2] = r.fb.get(25, 5);
+  assert.ok(r1 > 200, '0xF800 is red');
+  assert.ok(g2 > 200, 'ILI9341_GREEN is green');
+});
+
+check('e-paper renders dark-on-light', () => {
+  const r = SS.renderScreen('eink-29', 'void loop(){ display.setCursor(0,0); display.print("A"); }', {});
+  const bg = r.fb.get(290, 120); assert.ok(bg[0] > 200, 'background must be light');
+});
+
+check('an LED matrix honours setRow bit patterns', () => {
+  const r = SS.renderScreen('max7219', 'void loop(){ lc.setRow(0, 0, 0xFF); lc.setRow(0, 7, 0x81); }', {});
+  assert.equal(r.fb.litCount(), 8 + 2);
+});
+
+check('unsupported calls are reported by name, never silently dropped', () => {
+  const r = SS.renderScreen('oled-ssd1306', 'void loop(){ display.drawBitmap(0,0,logo,64,64,1); display.print("x"); }', {});
+  assert.ok(r.unsupported.includes('drawBitmap'));
+  assert.ok(/Not understood: drawBitmap/.test(r.note));
+});
+
+check('the note always says control flow is not executed', () => {
+  const r = SS.renderScreen('oled-ssd1306', OLED, {});
+  assert.ok(/Control flow is not executed/.test(r.note), 'this is the honesty label');
+});
+
+check('a runaway sketch is truncated, not hung', () => {
+  const code = 'void loop(){' + 'display.print("x");'.repeat(2000) + '}';
+  const t0 = performance.now();
+  const r = SS.renderScreen('oled-ssd1306', code, {});
+  assert.ok(r.truncated);
+  assert.ok(performance.now() - t0 < 500, 'must bail fast');
+});
+
+check('screen sim never throws on hostile input', () => {
+  for (const [id, code, v] of [['oled-ssd1306', null, null], ['oled-ssd1306', '', {}], ['nope', 'x', {}],
+    ['oled-ssd1306', 'display.print(', {}], ['oled-ssd1306', 'display.fillRect(NaN,NaN,NaN,NaN,x);', {}],
+    ['lcd1602', 'lcd.setCursor(999,999); lcd.print("a");', {}], ['tft-28-spi', 'tft.drawLine(-9e9,0,9e9,0,1);', {}]]) {
+    const r = SS.renderScreen(id, code, v);
+    assert.equal(typeof r.ok, 'boolean', id);
+  }
+});
+
+check('upscaled image data keeps square pixels', () => {
+  const r = SS.renderScreen('oled-ssd1306', 'void loop(){ display.drawPixel(3,3,1); }', {});
+  const img = SS.framebufferToImageData(r.fb, 4);
+  assert.equal(img.width, 512); assert.equal(img.height, 256);
+  // the single pixel becomes a 4×4 block, all lit
+  let lit = 0;
+  for (let y = 12; y < 16; y++) for (let x = 12; x < 16; x++) if (img.data[(y * 512 + x) * 4]) lit++;
+  assert.equal(lit, 16);
 });
 
 // ---------------------------------------------------------------------------

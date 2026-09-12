@@ -11,6 +11,7 @@ import { useStore } from '../lib/store.js';
 import { resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr, packScale } from '../lib/scaleUtil.js';
 import { makeGeometry, bakedGeometry, prepareBrushGeometry, geometryScale } from '../lib/geometryFactory.js';
+import ScreenFace from './ScreenFace.jsx';
 import CaptureFramer from './CaptureFramer.jsx';
 
 // PBR hints derived from the mesh's assigned physical material (metal vs not).
@@ -358,6 +359,7 @@ function MeshItem({ mesh, ghost = false }) {
         onClick={onClick}
       >
         {content}
+        {mesh.kind === 'part' && <ScreenFace mesh={mesh} />}
       </group>
       {isPrimary && groupRef.current && (
         <TransformControls
