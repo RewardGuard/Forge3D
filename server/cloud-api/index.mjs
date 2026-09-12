@@ -503,7 +503,7 @@ const server = http.createServer(async (req, res) => {
       reserve(email, VISION_TOKEN_COST);
       const t0 = Date.now();
       try {
-        const r = await upstreamFetch(HF_ROUTER_URL, {
+        const r = await fetch(HF_ROUTER_URL, {
           method: 'POST',
           headers: { authorization: `Bearer ${HF_TOKEN}`, 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -540,7 +540,7 @@ const server = http.createServer(async (req, res) => {
       const t0 = Date.now();
       try {
         const headers = { authorization: `Bearer ${HF_TOKEN}`, 'content-type': 'application/json' };
-        const post = await upstreamFetch(`${HF_SPACE}${HF_FN}`, {
+        const post = await fetch(`${HF_SPACE}${HF_FN}`, {
           method: 'POST', headers,
           body: JSON.stringify({ data: [String(body.prompt), Number(body.seed) || 0, Number(body.guidance) || 15.0, Number(body.steps) || 32] }),
         });
@@ -551,7 +551,7 @@ const server = http.createServer(async (req, res) => {
         const timer = setTimeout(() => ac.abort(), 240000);
         let text;
         try {
-          const stream = await upstreamFetch(`${HF_SPACE}${HF_FN}/${event_id}`, { headers: { authorization: `Bearer ${HF_TOKEN}` }, signal: ac.signal });
+          const stream = await fetch(`${HF_SPACE}${HF_FN}/${event_id}`, { headers: { authorization: `Bearer ${HF_TOKEN}` }, signal: ac.signal });
           text = await stream.text();
         } finally { clearTimeout(timer); }
         addUsage(email, HF3D_TOKEN_COST);
