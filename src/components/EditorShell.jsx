@@ -1,4 +1,5 @@
 import React from 'react';
+import CodeWorkspace from './CodeWorkspace.jsx';
 import { useStore } from '../lib/store.js';
 import DesignWorkspace from '../panels/DesignWorkspace.jsx';
 import CircuitWorkspace from '../panels/CircuitWorkspace.jsx';
@@ -14,6 +15,7 @@ const TABS = [
   { id: 'orchestra', label: '✦ Orchestra', hint: 'AI director — builds whole projects for you' },
   { id: 'design', label: '3D Design', hint: 'Meshy AI + viewport' },
   { id: 'circuit', label: 'Circuit', hint: 'Parts, wiring & BOM' },
+  { id: 'code', label: '</> Code', hint: 'Full-screen firmware editor' },
   { id: 'export', label: 'Export', hint: 'Sticker SVG + bill of materials' },
   { id: 'lifesim', label: 'Life Sim', hint: 'Run code + real-world physics' },
 ];
@@ -58,6 +60,7 @@ export default function EditorShell({ chromeless = false }) {
         {tab === 'orchestra' && <OrchestraPanel />}
         {tab === 'design' && <DesignWorkspace />}
         {tab === 'circuit' && <CircuitWorkspace />}
+        {tab === 'code' && <CodeWorkspace />}
         {tab === 'export' && <ExportWorkspace />}
         {tab === 'lifesim' && <LifeSimWorkspace />}
       </main>
