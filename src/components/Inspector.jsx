@@ -32,6 +32,11 @@ export default function Inspector() {
   const [kBusy, setKBusy] = React.useState(false);
   const [kMsg, setKMsg] = React.useState(null);
   const [kEdges, setKEdges] = React.useState(null);
+  const edgePick = useStore((s) => s.edgePick);
+  const setEdgePickActive = useStore((s) => s.setEdgePickActive);
+  const clearEdgePick = useStore((s) => s.clearEdgePick);
+  const pickingThis = edgePick.active && edgePick.meshId === mesh?.id;
+  const pickedCount = pickingThis ? edgePick.indices.length : 0;
   const removeMesh = useStore((s) => s.removeMesh);
   const transformMode = useStore((s) => s.transformMode);
   const setTransformMode = useStore((s) => s.setTransformMode);
@@ -238,11 +243,14 @@ export default function Inspector() {
               className="btn primary" disabled={kBusy}
               onClick={async () => {
                 setKBusy(true); setKMsg({ kind: 'info', text: kernelStatus().loading || !kernelStatus().ready ? 'Loading the B-rep kernel (~64 MB, once per session)…' : 'Running…' });
-                const args = kOp === 'shell' ? { thicknessMm: kVal } : kOp === 'chamfer' ? { distanceMm: kVal } : { radiusMm: kVal };
+                // an explicit edge selection narrows fillet/chamfer; empty = all edges
+                const edgeIndices = pickedCount > 0 && kOp !== 'shell' ? edgePick.indices : null;
+                const args = kOp === 'shell' ? { thicknessMm: kVal } : kOp === 'chamfer' ? { distanceMm: kVal, edgeIndices } : { radiusMm: kVal, edgeIndices };
                 const r = await runKernelOp(mesh, kOp, args);
                 if (r.ok) {
                   replaceMesh(mesh.id, r.mesh);
-                  setKMsg({ kind: 'ok', text: `${kOp} applied — ${r.summary}` });
+                  clearEdgePick();
+                  setKMsg({ kind: 'ok', text: `${kOp} applied${edgeIndices ? ` to ${edgeIndices.length} selected edge${edgeIndices.length === 1 ? '' : 's'}` : ' to all edges'} — ${r.summary}` });
                 } else {
                   setKMsg({ kind: 'err', text: r.reason });
                 }
@@ -254,6 +262,16 @@ export default function Inspector() {
             <p className={kMsg.kind === 'err' ? 'status error small' : kMsg.kind === 'ok' ? 'status ok small' : 'muted small'}>
               {kMsg.text}
             </p>
+          )}
+          {kOp !== 'shell' && (
+            <div className="row" style={{ marginTop: 6 }}>
+              <button
+                className={'btn' + (pickingThis ? ' primary' : '')}
+                onClick={() => (pickingThis ? clearEdgePick() : setEdgePickActive(true))}
+                title="Click edges in the 3D view to choose which ones to fillet or chamfer"
+              >{pickingThis ? `◈ Picking edges — ${pickedCount} selected` : '◈ Pick edges'}</button>
+              {pickingThis && <span className="muted small">{pickedCount === 0 ? 'none picked → applies to ALL edges' : 'click more, or Apply'}</span>}
+            </div>
           )}
           <div className="row" style={{ marginTop: 6 }}>
             <button className="btn ghost" disabled={kBusy} onClick={async () => {

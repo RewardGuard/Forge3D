@@ -300,6 +300,19 @@ export const useStore = create((set, get) => ({
       });
       return { meshes: keep, selectedMeshId: id, selectedMeshIds: [id] };
     }),
+  // Edge selection for kernel operations: which edges of which body. Empty
+  // means 'all edges', which is what the buttons did before edges were
+  // pickable at all.
+  edgePick: { meshId: null, indices: [], active: false },
+  setEdgePickActive: (active) => set((s) => ({ edgePick: { ...s.edgePick, active, meshId: active ? s.selectedMeshId : null, indices: active ? s.edgePick.indices : [] } })),
+  toggleEdge: (meshId, index) => set((s) => {
+    const same = s.edgePick.meshId === meshId;
+    const cur = same ? s.edgePick.indices : [];
+    const next = cur.includes(index) ? cur.filter((i) => i !== index) : [...cur, index];
+    return { edgePick: { meshId, indices: next, active: true } };
+  }),
+  clearEdgePick: () => set({ edgePick: { meshId: null, indices: [], active: false } }),
+
   // Swap one body for another, keeping its id, world position and selection.
   // Used by the B-rep kernel: a filleted body is a baked solid, not the
   // primitive it came from, but from the user's point of view it is still

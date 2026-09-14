@@ -1,7 +1,7 @@
 // Prove the path the Inspector buttons actually take:
 // primitive mesh → OCCT solid → operation → baked mesh the renderer draws.
 import assert from 'node:assert/strict';
-import { runKernelOp, edgeCount, meshToSTEP, kernelSupports } from '../src/lib/kernelBridge.js';
+import { runKernelOp, edgeCount, meshToSTEP, kernelSupports, meshEdgePolylines } from '../src/lib/kernelBridge.js';
 
 const C = { g: '\x1b[32m', r: '\x1b[31m', d: '\x1b[2m', b: '\x1b[1m', x: '\x1b[0m' };
 let pass = 0, fail = 0;
@@ -93,6 +93,46 @@ await check('hostile input never throws', async () => {
     assert.equal(typeof r.ok, 'boolean');
     if (!r.ok) assert.ok(r.reason && r.reason.length > 5);
   }
+});
+
+await check('edges are deduplicated: a box has 12, not 24', async () => {
+  const e = await meshEdgePolylines(box);
+  assert.equal(e.length, 12);
+  assert.ok(e.every((x) => x.straight && x.points.length === 2));
+  const cyl = await meshEdgePolylines({ ...box, kind: 'cylinder', scale: 1 });
+  assert.equal(cyl.length, 3, '2 rims + 1 seam');
+  assert.equal(cyl.filter((x) => !x.straight).length, 2);
+});
+
+await check('a fillet on SELECTED edges touches only those', async () => {
+  const all = await runKernelOp(box, 'fillet', { radiusMm: 2 });
+  const some = await runKernelOp(box, 'fillet', { radiusMm: 2, edgeIndices: [0, 1, 2, 3] });
+  assert.ok(all.ok && some.ok, some.reason);
+  assert.ok(some.after.faces < all.after.faces, `4 edges (${some.after.faces} faces) must add fewer faces than 12 (${all.after.faces})`);
+  assert.ok(some.after.faces > some.before.faces, 'but it must still have added blend faces');
+});
+
+await check('PHONE PROFILE: big radius on the 4 vertical corners, which "all edges" refused', async () => {
+  // A phone slab: 77 × 16.6 × 153 mm. A uniform 9 mm fillet is impossible —
+  // it exceeds half the 16.6 mm thickness on the horizontal edges. The kernel
+  // refused it in design-phone.mjs. Selecting only the 4 vertical corner
+  // edges is exactly the operation a real phone body needs.
+  const slab = { id: 'ph', kind: 'box', scale: [77 / 83.33, 16.6 / 83.33, 153 / 83.33], position: [0, 0, 0], rotation: [0, 0, 0], color: '#888' };
+  const edges = await meshEdgePolylines(slab);
+  // vertical = the edge runs along Y (the thickness axis)
+  const vertical = edges.filter((e) => Math.abs(e.points[0][1] - e.points[1][1]) > Math.abs(e.points[0][0] - e.points[1][0]) && Math.abs(e.points[0][1] - e.points[1][1]) > Math.abs(e.points[0][2] - e.points[1][2]));
+  assert.equal(vertical.length, 4, 'a box has exactly 4 edges along Y');
+  const refusedAll = await runKernelOp(slab, 'fillet', { radiusMm: 9 });
+  assert.equal(refusedAll.ok, false, 'uniform 9 mm must still be refused');
+  const corners = await runKernelOp(slab, 'fillet', { radiusMm: 9, edgeIndices: vertical.map((e) => e.index) });
+  assert.ok(corners.ok, corners.reason);
+  console.log(`     ${C.d}all-edges r=9 → refused · 4 vertical corners r=9 → ${corners.summary}${C.x}`);
+});
+
+await check('an out-of-range edge index is ignored, not fatal', async () => {
+  const r = await runKernelOp(box, 'fillet', { radiusMm: 2, edgeIndices: [999] });
+  assert.equal(r.ok, false);
+  assert.ok(/No edge matched/i.test(r.reason));
 });
 
 console.log('');

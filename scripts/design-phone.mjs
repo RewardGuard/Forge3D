@@ -95,37 +95,63 @@ const count = (s, t) => {
 
 const slab = new oc.BRepPrimAPI_MakeBox_2(new oc.gp_Pnt_3(-W / 2, -thickness / 2, -L / 2), W, thickness, L).Shape();
 
-// Round the four vertical corners to CORNER_R, then break every remaining
-// edge — the rounded-rectangle profile a phone actually has.
-function filletAll(shape, r) {
-  const f = new oc.BRepFilletAPI_MakeFillet(shape, oc.ChFi3d_FilletShape.ChFi3d_Rational);
+// A phone is NOT a uniformly filleted slab. The four vertical corners carry
+// a large radius (the rounded-rectangle silhouette) while the front/back
+// edges carry a small one — a big radius there would exceed half the
+// thickness and the fillets from opposite faces would cross.
+//
+// An earlier version of this script applied CORNER_R to every edge. OCCT's
+// builder returned IsDone() = true and a 26-face solid — and that solid had
+// 38% MORE volume than the uncut slab, i.e. it was self-intersecting garbage,
+// and the STEP file written from it was worthless. The volume check in
+// kernelBridge.validateRemoval now catches that class of failure; here the
+// edges are simply selected correctly in the first place.
+const EDGE_R = 1.5;   // front/back edges — must be < thickness/2 = ${(thickness / 2).toFixed(1)}
+function uniqueEdges(shape) {
+  const out = [];
   const e = new oc.TopExp_Explorer_2(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
-  let n = 0; for (; e.More(); e.Next()) { f.Add_2(r, oc.TopoDS.Edge_1(e.Current())); n++; }
-  f.Build();
-  return f.IsDone() ? { ok: true, shape: f.Shape(), n } : { ok: false, n };
+  for (; e.More(); e.Next()) { const ed = oc.TopoDS.Edge_1(e.Current()); if (!out.some((k) => k.IsSame(ed))) out.push(ed); }
+  return out;
+}
+function edgeAxis(ed) {
+  const a = new oc.BRepAdaptor_Curve_2(ed);
+  const p0 = a.Value(a.FirstParameter()), p1 = a.Value(a.LastParameter());
+  const d = [Math.abs(p1.X() - p0.X()), Math.abs(p1.Y() - p0.Y()), Math.abs(p1.Z() - p0.Z())];
+  return d.indexOf(Math.max(...d));   // 0=x 1=y(thickness) 2=z
+}
+function volumeOf(shape) {
+  const g = new oc.GProp_GProps_1();
+  oc.BRepGProp.VolumeProperties_1(shape, g, false, false, false);
+  return g.Mass();
 }
 
 console.log(`\n${C.b}BODY${C.x} ${C.d}(OpenCascade B-rep solid)${C.x}`);
-console.log(`  slab ${W} × ${L} × ${thickness.toFixed(1)} mm → ${count(slab, 'FACE')} faces, ${count(slab, 'EDGE')} edges`);
+console.log(`  slab ${W} × ${L} × ${thickness.toFixed(1)} mm → ${count(slab, 'FACE')} faces, ${uniqueEdges(slab).length} edges`);
 
-// The corner radius must not exceed half the thickness on the horizontal
-// edges, so try the phone radius and let the kernel tell us the truth.
+const edges = uniqueEdges(slab);
+const vertical = edges.filter((ed) => edgeAxis(ed) === 1);
+const horizontal = edges.filter((ed) => edgeAxis(ed) !== 1);
+const V0 = volumeOf(slab);
+
 let body = null;
-for (const r of [CORNER_R, 6, 4, 2, 1]) {
-  const res = filletAll(slab, r);
-  if (res.ok) {
-    body = res.shape;
-    console.log(`  fillet r=${r} mm on all ${res.n} edges → ${C.g}OK${C.x}, ${count(body, 'FACE')} faces`);
-    if (r < CORNER_R) {
-      console.log(`  ${C.y}NOTE${C.x} the ${CORNER_R} mm corner was refused by the kernel: a uniform fillet`);
-      console.log(`       cannot exceed half the ${thickness.toFixed(1)} mm thickness on the horizontal edges.`);
-      console.log(`       A real phone uses a VARIABLE radius — large on the vertical corners, small`);
-      console.log(`       on the front/back edges. That needs per-edge selection, which the kernel`);
-      console.log(`       supports and Forge3D's UI does not expose yet.`);
+{
+  const f = new oc.BRepFilletAPI_MakeFillet(slab, oc.ChFi3d_FilletShape.ChFi3d_Rational);
+  for (const ed of vertical) f.Add_2(CORNER_R, ed);
+  for (const ed of horizontal) f.Add_2(EDGE_R, ed);
+  f.Build();
+  if (f.IsDone()) {
+    const shape = f.Shape();
+    const V1 = volumeOf(shape);
+    if (V1 < V0 && V1 > 0) {
+      body = shape;
+      console.log(`  fillet: ${vertical.length} vertical corners r=${CORNER_R} mm + ${horizontal.length} face edges r=${EDGE_R} mm → ${C.g}OK${C.x}, ${count(body, 'FACE')} faces`);
+      console.log(`  volume ${V0.toFixed(0)} → ${V1.toFixed(0)} mm³ (${((1 - V1 / V0) * 100).toFixed(2)}% removed — a fillet can only remove material, so this is a valid solid)`);
+    } else {
+      console.log(`  ${C.r}fillet REFUSED${C.x}: result volume ${V1.toFixed(0)} vs source ${V0.toFixed(0)} mm³ — self-intersecting`);
     }
-    break;
+  } else {
+    console.log(`  ${C.r}fillet REFUSED by the kernel${C.x}`);
   }
-  console.log(`  fillet r=${r} mm → ${C.r}refused by the kernel${C.x}`);
 }
 
 // ── Rear shell ────────────────────────────────────────────────────────────

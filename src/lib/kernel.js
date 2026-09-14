@@ -84,8 +84,15 @@ export async function topologyOf(shape) {
 export async function edgesOf(shape) {
   const oc = await kernel();
   const ex = new oc.TopExp_Explorer_2(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+  // The explorer yields an edge once per face that uses it, so a box reports
+  // 24 "edges" for its 12. Dedupe with IsSame so an index means one physical
+  // edge — otherwise clicking an edge could map to two indices, and a fillet
+  // on "index 3" and "index 15" would be the same edge added twice.
   const edges = [];
-  for (let i = 0; ex.More(); ex.Next(), i++) edges.push({ index: i, edge: oc.TopoDS.Edge_1(ex.Current()) });
+  for (; ex.More(); ex.Next()) {
+    const e = oc.TopoDS.Edge_1(ex.Current());
+    if (!edges.some((known) => known.edge.IsSame(e))) edges.push({ index: edges.length, edge: e });
+  }
   return edges;
 }
 
@@ -182,6 +189,56 @@ export async function shell(shape, thicknessMm, openFaceIndex = 0) {
   }
 }
 
+// ── Validation ────────────────────────────────────────────────────────────
+/**
+ * OCCT's own checker. ADVISORY ONLY in this WASM build: BRepCheck_Analyzer
+ * throws an uncatchable C++ exception on perfectly valid solids here, so it
+ * cannot be a gate. validateRemoval() below is the gate.
+ */
+export async function validateShape(shape) {
+  const oc = await kernel();
+  try {
+    const an = new oc.BRepCheck_Analyzer(shape, true, false);
+    const ok = an.IsValid_2();
+    return { valid: Boolean(ok), reason: ok ? null : 'The kernel built a result, but it is not a valid solid (self-intersecting or non-manifold).' };
+  } catch (e) {
+    return { valid: false, reason: 'The result is so malformed the kernel\'s own checker could not process it.', kernelError: String(e?.message || e).slice(0, 120) };
+  }
+}
+
+/**
+ * THE validity gate for material-removing operations (fillet, chamfer,
+ * shell). Physics, not heuristics: these operations can only REMOVE
+ * material, so a result with more volume than its source is self-
+ * intersecting garbage — and that is exactly what OCCT's fillet builder
+ * returns, with IsDone() true, for radii past what a face can carry. Measured
+ * on a 77×16.6×153 slab: valid fillets land within 0.4% of the analytic
+ * volume; invalid ones come back 38–96% LARGER than the uncut slab.
+ */
+export async function validateRemoval(before, after, label = 'operation') {
+  const v0 = await volumeOf(before);
+  const v1 = await volumeOf(after);
+  if (!(v1 > 0) || !Number.isFinite(v1)) {
+    return { valid: false, reason: `The ${label} produced a solid with no measurable volume.`, volumeBefore: v0, volumeAfter: v1 };
+  }
+  if (v1 > v0 * (1 + 1e-6)) {
+    return {
+      valid: false,
+      reason: `The ${label} is self-intersecting: the result has ${(v1 / v0 * 100 - 100).toFixed(0)}% MORE volume than the body it was cut from, which a material-removing operation cannot do. The kernel reported success anyway — this is the check that catches it.`,
+      volumeBefore: v0, volumeAfter: v1,
+    };
+  }
+  return { valid: true, volumeBefore: v0, volumeAfter: v1, removedMm3: v0 - v1 };
+}
+
+/** Exact volume in mm³ from the B-rep — not from a mesh approximation. */
+export async function volumeOf(shape) {
+  const oc = await kernel();
+  const g = new oc.GProp_GProps_1();
+  oc.BRepGProp.VolumeProperties_1(shape, g, false, false, false);
+  return g.Mass();
+}
+
 // ── Exchange ──────────────────────────────────────────────────────────────
 /** STEP — the format real manufacturing consumes. Returns the file text. */
 export async function exportSTEP(shape) {
@@ -263,3 +320,36 @@ export const KERNEL_UNLOCKS = [
   'Face, edge and vertex topology to select and measure against',
   'Boolean operations that keep a valid solid rather than a mesh',
 ];
+
+/**
+ * Every edge as a polyline of sampled points, in mm. Straight edges get two
+ * points; curved ones are sampled finely enough to draw. This is what lets
+ * the viewport show edges as things you can click — which is the whole
+ * difference between "fillet everything" and "fillet THIS edge".
+ */
+export async function edgePolylines(shape, curveSamples = 24) {
+  const oc = await kernel();
+  const all = await edgesOf(shape);
+  const lineType = oc.GeomAbs_CurveType.GeomAbs_Line.value;
+  const out = [];
+  for (const { index, edge } of all) {
+    try {
+      const ad = new oc.BRepAdaptor_Curve_2(edge);
+      const t0 = ad.FirstParameter(), t1 = ad.LastParameter();
+      const isLine = ad.GetType().value === lineType;
+      const n = isLine ? 1 : curveSamples;
+      const pts = [];
+      for (let k = 0; k <= n; k++) {
+        const p = ad.Value(t0 + ((t1 - t0) * k) / n);
+        pts.push([p.X(), p.Y(), p.Z()]);
+      }
+      // length, for the Inspector
+      let len = 0;
+      for (let k = 1; k < pts.length; k++) len += Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1], pts[k][2] - pts[k - 1][2]);
+      out.push({ index, points: pts, straight: isLine, lengthMm: len });
+    } catch {
+      out.push({ index, points: [], straight: true, lengthMm: 0 });
+    }
+  }
+  return out;
+}

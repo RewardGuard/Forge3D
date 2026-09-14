@@ -12,7 +12,7 @@
 // and undo restores the primitive.
 
 import * as THREE from 'three';
-import { kernel, filletEdges, chamferEdges, shell, exportSTEP, tessellate, topologyOf, edgesOf } from './kernel.js';
+import { kernel, filletEdges, chamferEdges, shell, exportSTEP, tessellate, topologyOf, edgesOf, validateRemoval } from './kernel.js';
 import { trueDimsMm, isRoundable } from './rounding.js';
 import { SCENE_SCALE } from '../data/parts.js';
 
@@ -77,6 +77,30 @@ export async function shapeToBaked(shape, { deflectionMm = 0.05, label, color, m
   };
 }
 
+// ── Per-edge radius limit ─────────────────────────────────────────────────
+// OCCT's fillet builder reports IsDone() for radii that produce
+// self-intersecting geometry — on a 16.6 mm slab it "succeeds" up to r=15 and
+// crashes its own validator at r≥8.3. So the limit is enforced HERE, before
+// the kernel is called, from the body's geometry:
+//   box edge along axis A → r < half the smaller of the other two dimensions
+//     (the two fillets on opposite edges of a face must not meet)
+//   cylinder rim → r < min(radius, height/2)
+function edgeRadiusLimitMm(mesh, edgePolylinesMm) {
+  const [w, h, d] = trueDimsMm(mesh);
+  if (mesh.kind === 'cylinder') return () => Math.min(w / 2, h / 2);
+  if (mesh.kind === 'sphere') return () => 0;
+  if (mesh.kind === 'cone') return () => Math.min(w / 2, h / 2);
+  // box / plane: classify each edge by its axis
+  return (edge) => {
+    const [p0, p1] = edge.points;
+    if (!p0 || !p1) return Math.min(w, h, d) / 2;
+    const dx = Math.abs(p1[0] - p0[0]), dy = Math.abs(p1[1] - p0[1]), dz = Math.abs(p1[2] - p0[2]);
+    if (dx >= dy && dx >= dz) return Math.min(h, d) / 2;   // along X
+    if (dy >= dx && dy >= dz) return Math.min(w, d) / 2;   // along Y
+    return Math.min(w, h) / 2;                             // along Z
+  };
+}
+
 /**
  * Run a kernel operation on one mesh and return a replacement mesh.
  * Never throws: a kernel refusal comes back as { ok:false, reason }, which is
@@ -100,6 +124,28 @@ export async function runKernelOp(mesh, op, args = {}) {
   if (!shape) return { ok: false, reason: `No kernel primitive matches "${mesh.kind}".` };
 
   const before = await topologyOf(shape);
+
+  // Refuse radii the geometry cannot carry BEFORE asking the kernel.
+  if (op === 'fillet' || op === 'chamfer') {
+    const r = Number(op === 'fillet' ? args.radiusMm : args.distanceMm);
+    const { edgePolylines } = await import('./kernel.js');
+    const polys = await edgePolylines(shape, 2);
+    const limitOf = edgeRadiusLimitMm(mesh, polys);
+    const chosen = args.edgeIndices ? polys.filter((e) => args.edgeIndices.includes(e.index)) : polys;
+    if (!chosen.length) return { ok: false, reason: 'No edge matched the selection.', before };
+    const worst = chosen.reduce((acc, e) => { const lim = limitOf(e); return lim < acc.lim ? { lim, e } : acc; }, { lim: Infinity, e: null });
+    if (r >= worst.lim - 1e-6) {
+      const dims = trueDimsMm(mesh).map((v) => v.toFixed(1)).join(' × ');
+      return {
+        ok: false, before,
+        reason: `Radius ${r} mm exceeds the available local geometry on edge ${worst.e.index}. `
+          + `This body is ${dims} mm; the fillets on opposite edges of its thinnest face would meet at ${worst.lim.toFixed(2)} mm. `
+          + (args.edgeIndices ? 'Reduce the radius, or drop that edge from the selection.' : 'Reduce the radius, or pick only the edges that can carry it.'),
+        maxRadiusMm: +worst.lim.toFixed(3),
+      };
+    }
+  }
+
   let res;
   if (op === 'fillet') res = await filletEdges(shape, args.radiusMm, args.edgeIndices || null);
   else if (op === 'chamfer') res = await chamferEdges(shape, args.distanceMm, args.edgeIndices || null);
@@ -107,6 +153,12 @@ export async function runKernelOp(mesh, op, args = {}) {
   else return { ok: false, reason: `Unknown kernel operation "${op}".` };
 
   if (!res.ok) return { ok: false, reason: res.reason, kernelError: res.kernelError, before };
+
+  // IsDone() is not validity. A fillet/chamfer/shell can only remove
+  // material; if the result grew, the kernel handed back self-intersecting
+  // geometry and we refuse it here.
+  const check = await validateRemoval(shape, res.shape, op);
+  if (!check.valid) return { ok: false, reason: check.reason, before, invalidResult: true, volumeBefore: check.volumeBefore, volumeAfter: check.volumeAfter };
 
   const after = await topologyOf(res.shape);
   const baked = await shapeToBaked(res.shape, {
@@ -120,7 +172,8 @@ export async function runKernelOp(mesh, op, args = {}) {
     mesh: baked,
     shape: res.shape,
     before, after,
-    summary: `${before.faces} faces → ${after.faces}, ${baked.triangles} triangles`,
+    summary: `${before.faces} faces → ${after.faces}, ${baked.triangles} triangles, ${(check.removedMm3 / 1000).toFixed(2)} cm³ removed`,
+    volumeBefore_mm3: check.volumeBefore, volumeAfter_mm3: check.volumeAfter,
   };
 }
 
@@ -143,3 +196,16 @@ export async function meshToSTEP(mesh) {
 }
 
 export { isRoundable };
+
+/**
+ * Edges of a primitive as polylines in SCENE units, in the mesh's local frame
+ * (so they can be drawn inside the mesh's own group and follow its transform).
+ */
+export async function meshEdgePolylines(mesh) {
+  if (!kernelSupports(mesh?.kind)) return [];
+  const shape = await meshToShape(mesh);
+  if (!shape) return [];
+  const { edgePolylines } = await import('./kernel.js');
+  const edges = await edgePolylines(shape);
+  return edges.map((e) => ({ ...e, points: e.points.map(([x, y, z]) => [toScene(x), toScene(y), toScene(z)]) }));
+}
