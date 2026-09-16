@@ -5,6 +5,9 @@ import * as THREE from 'three';
 import { roundedBoxGeometry, roundedCylinderGeometry, hasBakedScale } from './rounding.js';
 
 export function makeGeometry(mesh) {
+  // A body with active features draws its regenerated geometry (already at
+  // true size) — the primitive underneath is still there, still editable.
+  if (hasFeatureGeom(mesh)) return bakedGeometry({ geom: mesh.featureGeom });
   // A corner radius bakes the body's true dimensions into the geometry so the
   // round stays circular; the renderer must then draw it at scale 1 (see
   // geometryScale below). Rounding a unit cube and scaling afterwards would
@@ -58,5 +61,8 @@ export function bakedGeometry(mesh) {
 // The scale the renderer should apply. Meshes whose geometry already carries
 // their true size must not be scaled again.
 export function geometryScale(mesh, scaleArr) {
-  return hasBakedScale(mesh) ? [1, 1, 1] : scaleArr(mesh.scale);
+  return hasBakedScale(mesh) || hasFeatureGeom(mesh) ? [1, 1, 1] : scaleArr(mesh.scale);
+}
+export function hasFeatureGeom(mesh) {
+  return Boolean(mesh?.featureGeom?.positions?.length && (mesh.features || []).some((f) => f.enabled));
 }

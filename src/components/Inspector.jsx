@@ -6,6 +6,8 @@ import { runKernelOp, kernelSupports, edgeCount, meshToSTEP } from '../lib/kerne
 import { kernelStatus, KERNEL_UNLOCKS } from '../lib/kernel.js';
 import { ScreenPreview } from './ScreenFace.jsx';
 import MeasurePanel from './MeasurePanel.jsx';
+import FeatureTimeline from './FeatureTimeline.jsx';
+import { newFeature, scheduleRegenerate } from '../lib/features.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 const AXES = ['x', 'y', 'z'];
@@ -136,6 +138,7 @@ export default function Inspector() {
               const sc = [...scaleArr(mesh.scale)];
               sc[i] = Math.max(0.01, parseFloat(e.target.value) || 0.01);
               updateMesh(mesh.id, { scale: packScale(sc[0], sc[1], sc[2]) });
+              if (mesh.features?.length) scheduleRegenerate(mesh.id);
             }}
           />
         ))}
@@ -144,7 +147,7 @@ export default function Inspector() {
       <input
         type="range" min="0.1" max="4" step="0.05"
         value={avgScale(mesh.scale)}
-        onChange={(e) => updateMesh(mesh.id, { scale: parseFloat(e.target.value) })}
+        onChange={(e) => { updateMesh(mesh.id, { scale: parseFloat(e.target.value) }); if (mesh.features?.length) scheduleRegenerate(mesh.id); }}
       />
 
       {/* Real corner geometry — an arc or a facet actually cut into the solid,
@@ -244,22 +247,22 @@ export default function Inspector() {
             </span>
             <button
               className="btn primary" disabled={kBusy}
-              onClick={async () => {
-                setKBusy(true); setKMsg({ kind: 'info', text: kernelStatus().loading || !kernelStatus().ready ? 'Loading the B-rep kernel (~64 MB, once per session)…' : 'Running…' });
-                // an explicit edge selection narrows fillet/chamfer; empty = all edges
-                const edgeIndices = pickedCount > 0 && kOp !== 'shell' ? edgePick.indices : null;
-                const args = kOp === 'shell' ? { thicknessMm: kVal } : kOp === 'chamfer' ? { distanceMm: kVal, edgeIndices } : { radiusMm: kVal, edgeIndices };
-                const r = await runKernelOp(mesh, kOp, args);
-                if (r.ok) {
-                  replaceMesh(mesh.id, r.mesh);
-                  clearEdgePick();
-                  setKMsg({ kind: 'ok', text: `${kOp} applied${edgeIndices ? ` to ${edgeIndices.length} selected edge${edgeIndices.length === 1 ? '' : 's'}` : ' to all edges'} — ${r.summary}` });
-                } else {
-                  setKMsg({ kind: 'err', text: r.reason });
-                }
-                setKBusy(false);
+              onClick={() => {
+                // Parametric: Apply ADDS a feature to the body's history and the
+                // geometry regenerates. The primitive stays editable underneath.
+                // (The old path replaced the body with a baked solid — one-way.)
+                const edgeIndices = pickedCount > 0 && kOp !== 'shell' ? [...edgePick.indices] : null;
+                const feat = kOp === 'shell'
+                  ? newFeature('shell', { thickness_mm: kVal, openFace: 0 })
+                  : kOp === 'chamfer'
+                    ? newFeature('chamfer', { distance_mm: kVal, edgeIndices })
+                    : newFeature('fillet', { radius_mm: kVal, edgeIndices });
+                useStore.getState().addFeature(mesh.id, feat);
+                clearEdgePick();
+                scheduleRegenerate(mesh.id, 0);
+                setKMsg({ kind: 'ok', text: `${kOp} added as a feature${edgeIndices ? ` on ${edgeIndices.length} edge${edgeIndices.length === 1 ? '' : 's'}` : ''} — edit it below any time.` });
               }}
-            >{kBusy ? '…' : 'Apply'}</button>
+            >Apply</button>
           </div>
           {kMsg && (
             <p className={kMsg.kind === 'err' ? 'status error small' : kMsg.kind === 'ok' ? 'status ok small' : 'muted small'}>
@@ -293,10 +296,7 @@ export default function Inspector() {
             }}>Export STEP</button>
           </div>
           {kEdges != null && <p className="muted small">{kEdges} addressable edges on this solid.</p>}
-          <p className="muted small">
-            Kernel operations replace the primitive with a baked solid — the sliders above stop
-            applying until you undo. {KERNEL_UNLOCKS[0]}.
-          </p>
+          <FeatureTimeline mesh={mesh} />
         </>
       )}
 

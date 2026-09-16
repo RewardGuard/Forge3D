@@ -195,7 +195,9 @@ export async function meshToSTEP(mesh) {
   if (!kernelSupports(mesh?.kind)) {
     return { ok: false, reason: `STEP export needs a kernel solid. "${mesh?.kind}" bodies export as STL instead.` };
   }
-  const shape = await meshToShape(mesh);
+  // export the FEATURED solid, so fillets and shells reach the STEP file
+  const { featuredShape } = await import('./features.js');
+  const shape = await featuredShape(mesh);
   if (!shape) return { ok: false, reason: 'Could not build a solid.' };
   return exportSTEP(shape);
 }

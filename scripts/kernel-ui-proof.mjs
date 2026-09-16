@@ -5,6 +5,8 @@ import { runKernelOp, edgeCount, meshToSTEP, kernelSupports, meshEdgePolylines }
 import { measureBody, measureBetween, measureEdge, angleBetween } from '../src/lib/measure.js';
 import { useStore } from '../src/lib/store.js';
 import * as ASM from '../src/lib/assembly.js';
+import { newFeature, regenerate, runRegenerate, describeFeature, featureSignature } from '../src/lib/features.js';
+import { hasFeatureGeom } from '../src/lib/geometryFactory.js';
 
 const C = { g: '\x1b[32m', r: '\x1b[31m', d: '\x1b[2m', b: '\x1b[1m', x: '\x1b[0m' };
 let pass = 0, fail = 0;
@@ -281,6 +283,110 @@ await check('ASSEMBLY: BOM collapses identical bodies and prices only catalogue 
   const csv = ASM.bomToCsv(b);
   assert.ok(csv.split('\n').length === b.rows.length + 2, 'header + rows + total');
   assert.ok(/"TOTAL"/.test(csv));
+});
+
+const featBody = (features = []) => ({ id: 'fb', kind: 'box', label: 'block', scale: [60 / 83.33, 20 / 83.33, 40 / 83.33], position: [0, 0, 0], rotation: [0, 0, 0], material: 'pla', features });
+
+await check('PARAMETRIC: a fillet feature regenerates real geometry and keeps the primitive', async () => {
+  const m = featBody([newFeature('fillet', { radius_mm: 2 })]);
+  const r = await regenerate(m);
+  assert.ok(r.ok, r.steps.map((x) => x.reason).join());
+  assert.equal(m.kind, 'box', 'the primitive is NOT replaced');
+  assert.ok(r.geom.positions.length > 300);
+  assert.equal(r.steps[0].faces, '6→26');
+});
+
+await check('PARAMETRIC: editing the radius changes the geometry', async () => {
+  const a = await regenerate(featBody([newFeature('fillet', { radius_mm: 1 })]));
+  const b = await regenerate(featBody([newFeature('fillet', { radius_mm: 5 })]));
+  assert.ok(a.ok && b.ok);
+  assert.notEqual(a.geom.positions.length, b.geom.positions.length, 'different radius, different mesh');
+});
+
+await check('PARAMETRIC: resizing the base replays every feature', async () => {
+  const feat = newFeature('fillet', { radius_mm: 2 });
+  const small = await regenerate(featBody([feat]));
+  const big = await regenerate({ ...featBody([feat]), scale: [120 / 83.33, 40 / 83.33, 80 / 83.33] });
+  assert.ok(small.ok && big.ok);
+  assert.ok(big.half[0] > small.half[0] * 1.9, 'the regenerated body must be twice as wide');
+});
+
+await check('PARAMETRIC: a suppressed feature is skipped, not deleted', async () => {
+  const feat = { ...newFeature('fillet', { radius_mm: 2 }), enabled: false };
+  const r = await regenerate(featBody([feat]));
+  assert.ok(r.ok); assert.equal(r.steps[0].skipped, true);
+  const before = await regenerate(featBody([]));
+  assert.equal(r.geom.positions.length, before.geom.positions.length, 'suppressed = plain primitive');
+});
+
+await check('PARAMETRIC: an impossible feature fails BY NAME and keeps the last valid shape', async () => {
+  const ok = newFeature('fillet', { radius_mm: 2 });
+  const bad = newFeature('fillet', { radius_mm: 50 });
+  const r = await regenerate(featBody([ok, bad]));
+  assert.equal(r.ok, false);
+  assert.equal(r.failedAt, bad.id, 'must name the feature that broke');
+  assert.equal(r.steps[0].ok, true, 'the earlier feature still applied');
+  assert.ok(/exceeds|carry|geometry/i.test(r.steps[1].reason));
+  assert.ok(r.geom.positions.length > 300, 'geometry from the valid prefix is returned, not nothing');
+});
+
+await check('PARAMETRIC: features chain — shell then fillet, and fillet then fillet', async () => {
+  // Shell first, then round the (now thin) edges with a radius under the
+  // wall thickness — the order real CAD uses.
+  const r = await regenerate(featBody([newFeature('shell', { thickness_mm: 1.5, openFace: 0 }), newFeature('fillet', { radius_mm: 0.5 })]));
+  assert.ok(r.ok, r.steps.map((x) => x.reason).join());
+  assert.equal(r.steps[0].faces, '6→11'); assert.equal(r.steps[1].faces, '11→51');
+  const two = await regenerate(featBody([newFeature('fillet', { radius_mm: 2, edgeIndices: [1, 3, 5, 7] }), newFeature('fillet', { radius_mm: 1, edgeIndices: [0, 2] })]));
+  assert.ok(two.ok); assert.equal(two.steps[1].faces, '10→18');
+});
+
+await check('PARAMETRIC: fillet-then-shell is a known kernel limit and fails with a reason', async () => {
+  // OCCT cannot offset through rational blend surfaces, so hollowing a
+  // filleted body fails. That is the kernel's limit, not a silent skip: the
+  // shell step reports it, the fillet stays, and reordering fixes it.
+  const r = await regenerate(featBody([newFeature('fillet', { radius_mm: 2 }), newFeature('shell', { thickness_mm: 1.5, openFace: 0 })]));
+  assert.equal(r.ok, false);
+  assert.equal(r.steps[0].ok, true, 'the fillet still applies');
+  assert.equal(r.steps[1].ok, false);
+  assert.ok(/hollow/i.test(r.steps[1].reason));
+  assert.ok(r.geom.positions.length > 300, 'the filleted body is still shown');
+});
+
+await check('PARAMETRIC: a fillet larger than a shelled wall is refused, correctly', async () => {
+  const r = await regenerate(featBody([newFeature('shell', { thickness_mm: 1.5, openFace: 0 }), newFeature('fillet', { radius_mm: 2 })]));
+  assert.equal(r.ok, false);
+  assert.ok(/exceeds/i.test(r.steps[1].reason), 'a 2 mm fillet cannot live on a 1.5 mm wall');
+});
+
+await check('PARAMETRIC: a per-edge fillet feature respects the selection', async () => {
+  const all = await regenerate(featBody([newFeature('fillet', { radius_mm: 2 })]));
+  const four = await regenerate(featBody([newFeature('fillet', { radius_mm: 2, edgeIndices: [0, 1, 2, 3] })]));
+  assert.ok(all.ok && four.ok);
+  assert.ok(Number(four.steps[0].faces.split('→')[1]) < Number(all.steps[0].faces.split('→')[1]));
+});
+
+await check('PARAMETRIC: the store caches by signature and only regenerates on change', async () => {
+  useStore.setState({ meshes: [featBody([newFeature('fillet', { radius_mm: 2 })])] });
+  await runRegenerate('fb');
+  const m1 = useStore.getState().meshes[0];
+  assert.ok(hasFeatureGeom(m1), 'geometry cached on the mesh');
+  assert.equal(m1.featureSig, featureSignature(m1));
+  const g1 = m1.featureGeom;
+  await runRegenerate('fb');                       // same signature → no work
+  assert.strictEqual(useStore.getState().meshes[0].featureGeom, g1, 'unchanged body must not regenerate');
+  useStore.getState().updateFeature('fb', m1.features[0].id, { radius_mm: 4 });
+  await runRegenerate('fb');
+  assert.notStrictEqual(useStore.getState().meshes[0].featureGeom, g1, 'changed radius must regenerate');
+  useStore.getState().toggleFeature('fb', m1.features[0].id);
+  await runRegenerate('fb');
+  assert.equal(hasFeatureGeom(useStore.getState().meshes[0]), false, 'no active features → plain primitive again');
+  useStore.setState({ meshes: [] });
+});
+
+await check('PARAMETRIC: describeFeature reads like a timeline entry', () => {
+  assert.equal(describeFeature(newFeature('fillet', { radius_mm: 2.5 })), 'Fillet r=2.5 mm · all edges');
+  assert.equal(describeFeature(newFeature('chamfer', { distance_mm: 1, edgeIndices: [0, 1] })), 'Chamfer 1 mm · 2 edges');
+  assert.equal(describeFeature(newFeature('shell', { thickness_mm: 1.2, openFace: null })), 'Shell 1.2 mm wall · sealed');
 });
 
 console.log('');

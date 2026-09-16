@@ -11,7 +11,7 @@ import { Evaluator, Brush, ADDITION, SUBTRACTION } from 'three-bvh-csg';
 import { useStore } from '../lib/store.js';
 import { resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr, packScale } from '../lib/scaleUtil.js';
-import { makeGeometry, bakedGeometry, prepareBrushGeometry, geometryScale } from '../lib/geometryFactory.js';
+import { makeGeometry, bakedGeometry, prepareBrushGeometry, geometryScale, hasFeatureGeom } from '../lib/geometryFactory.js';
 import ScreenFace from './ScreenFace.jsx';
 import EdgePicker from './EdgePicker.jsx';
 import { explodedOffsets } from '../lib/assembly.js';
@@ -34,6 +34,7 @@ function BakedGeometry({ mesh }) {
 // ---- primitive geometry for a given mesh kind ----
 function PrimitiveGeometry({ mesh }) {
   if (mesh.kind === 'baked') return <BakedGeometry mesh={mesh} />;
+  if (hasFeatureGeom(mesh)) return <BakedGeometry mesh={{ geom: mesh.featureGeom }} />;
   switch (mesh.kind) {
     case 'sphere': return <sphereGeometry args={[0.5, 32, 32]} />;
     case 'cylinder': return <cylinderGeometry args={[0.4, 0.4, 1, 48]} />;

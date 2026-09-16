@@ -33,7 +33,9 @@ function materialOf(mesh) {
 /** An OCCT shape placed where the mesh is in the world, in mm. */
 async function worldShape(mesh) {
   const oc = await kernel();
-  const local = await meshToShape(mesh);
+  // measure the body as modelled — with its fillets, chamfers and shell
+  const { featuredShape } = await import('./features.js');
+  const local = await featuredShape(mesh);
   if (!local) return null;
   const tr = new oc.gp_Trsf_1();
   const [rx, ry, rz] = mesh.rotation || [0, 0, 0];
