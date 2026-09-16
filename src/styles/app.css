@@ -936,3 +936,17 @@ select:hover { border-color: var(--hover-border); }
 .cp-hist { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
 .cp-hist-title { flex: 1; }
 .btn.small { padding: 2px 8px; font-size: 11px; }
+
+/* ── Assembly panel ───────────────────────────────────────────────────── */
+.asm { display: flex; flex-direction: column; gap: 6px; }
+.asm-tree { border: 1px solid var(--border); border-radius: 6px; max-height: 260px; overflow-y: auto; background: var(--canvas); font-size: 12px; }
+.asm-row { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 0; }
+.asm-row.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.asm-row:hover { background: var(--panel-2); }
+.asm-tog { width: 16px; border: none; background: none; color: inherit; cursor: pointer; opacity: .6; padding: 0; }
+.asm-name { flex: 1; text-align: left; border: none; background: none; color: inherit; cursor: pointer; padding: 2px 4px; font: inherit; }
+.asm-leaf .asm-name { opacity: .9; }
+.asm-report { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+.asm-report.ok { border-color: #16a34a; } .asm-report.err { border-color: #dc2626; }
+.asm-issue { margin: 4px 0; color: #dc2626; } .asm-warn { margin: 4px 0; color: #d97706; }
+.asm-bom .ms-table td { vertical-align: top; }

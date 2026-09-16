@@ -337,6 +337,40 @@ export const useStore = create((set, get) => ({
       });
       return { meshes: keep, selectedMeshId: id, selectedMeshIds: [id] };
     }),
+  // ── Assemblies ──────────────────────────────────────────────────────────
+  // assemblies[id] = { id, name, parentId }; a mesh's assemblyId points at
+  // one (or nothing = root). The tree is derived in assembly.js.
+  assemblies: {},
+  createAssembly: (name, meshIds = [], parentId = null) => {
+    const id = 'asm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    set((s) => ({
+      assemblies: { ...s.assemblies, [id]: { id, name: name || 'Subassembly', parentId: parentId && s.assemblies[parentId] ? parentId : null } },
+      meshes: s.meshes.map((m) => (meshIds.includes(m.id) ? { ...m, assemblyId: id } : m)),
+    }));
+    return id;
+  },
+  renameAssembly: (id, name) => set((s) => (s.assemblies[id] ? { assemblies: { ...s.assemblies, [id]: { ...s.assemblies[id], name } } } : {})),
+  // Dissolve: members and children go to the parent. Bodies are never deleted.
+  dissolveAssembly: (id) => set((s) => {
+    const a = s.assemblies[id]; if (!a) return {};
+    const rest = { ...s.assemblies }; delete rest[id];
+    for (const k of Object.keys(rest)) if (rest[k].parentId === id) rest[k] = { ...rest[k], parentId: a.parentId };
+    return { assemblies: rest, meshes: s.meshes.map((m) => (m.assemblyId === id ? { ...m, assemblyId: a.parentId || null } : m)) };
+  }),
+  moveMeshToAssembly: (meshId, assemblyId) => set((s) => ({
+    meshes: s.meshes.map((m) => (m.id === meshId ? { ...m, assemblyId: assemblyId && s.assemblies[assemblyId] ? assemblyId : null } : m)),
+  })),
+  moveAssembly: (id, newParentId) => set((s) => {
+    if (!s.assemblies[id]) return {};
+    // refuse cycles: walk up from the new parent
+    let cur = newParentId;
+    while (cur) { if (cur === id) return {}; cur = s.assemblies[cur]?.parentId; }
+    return { assemblies: { ...s.assemblies, [id]: { ...s.assemblies[id], parentId: newParentId && s.assemblies[newParentId] ? newParentId : null } } };
+  }),
+  // exploded view is display state; 0 = assembled
+  explode: 0,
+  setExplode: (explode) => set({ explode: Math.max(0, Math.min(3, Number(explode) || 0)) }),
+
   // Body the Measure panel compares the selection against.
   measureTarget: null,
   setMeasureTarget: (measureTarget) => set({ measureTarget }),

@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import { runKernelOp, edgeCount, meshToSTEP, kernelSupports, meshEdgePolylines } from '../src/lib/kernelBridge.js';
 import { measureBody, measureBetween, measureEdge, angleBetween } from '../src/lib/measure.js';
+import { useStore } from '../src/lib/store.js';
+import * as ASM from '../src/lib/assembly.js';
 
 const C = { g: '\x1b[32m', r: '\x1b[31m', d: '\x1b[2m', b: '\x1b[1m', x: '\x1b[0m' };
 let pass = 0, fail = 0;
@@ -190,6 +192,95 @@ await check('MEASURE: angle between rotated bodies', () => {
   assert.equal(angleBetween([0, 0, 0], [0, 0, 0]), 0);
   assert.ok(Math.abs(angleBetween([0, 0, 0], [Math.PI / 2, 0, 0]) - 90) < 0.01);
   assert.ok(Math.abs(angleBetween([0, 0, 0], [Math.PI, 0, 0]) - 180) < 0.01);
+});
+
+const asmScene = () => {
+  useStore.setState({ assemblies: {}, explode: 0, meshes: [
+    { id: 'base', kind: 'box', label: 'base plate', position: [0, 0, 0], scale: [1, 0.1, 1], material: 'aluminum' },
+    { id: 'post', kind: 'cylinder', label: 'post', position: [0, 0.6, 0], scale: [0.2, 1, 0.2], material: 'steel' },
+    { id: 'cap', kind: 'box', label: 'cap', position: [0, 1.15, 0], scale: [0.3, 0.1, 0.3], material: 'pla' },
+    { id: 'far', kind: 'box', label: 'far part', position: [3, 0, 0], scale: 0.3, material: 'pla' },
+  ] });
+};
+
+await check('ASSEMBLY: a subassembly owns bodies and nests under another', () => {
+  asmScene();
+  const st = useStore.getState();
+  const mast = st.createAssembly('mast', ['post', 'cap']);
+  const whole = st.createAssembly('whole', ['base']);
+  useStore.getState().moveAssembly(mast, whole);
+  const t = ASM.assemblyTree();
+  assert.deepEqual(t.nodes[whole].children, [mast]);
+  assert.deepEqual(ASM.meshesUnder(whole, t).sort(), ['base', 'cap', 'post']);
+  assert.equal(t.nodes[mast].depth, 2);
+  assert.ok(t.nodes[ASM.ROOT].meshes.includes('far'), 'unassigned bodies stay at root');
+});
+
+await check('ASSEMBLY: cycles are refused, dissolve keeps every body', () => {
+  asmScene();
+  const st = useStore.getState();
+  const a = st.createAssembly('a', ['base']);
+  const b = st.createAssembly('b', ['post'], a);
+  useStore.getState().moveAssembly(a, b);            // a under b under a → refused
+  assert.equal(useStore.getState().assemblies[a].parentId, null, 'cycle must be refused');
+  useStore.getState().dissolveAssembly(b);
+  assert.equal(useStore.getState().meshes.length, 4, 'dissolve deletes nothing');
+  assert.equal(useStore.getState().meshes.find((m) => m.id === 'post').assemblyId, a, 'members move to the parent');
+});
+
+await check('ASSEMBLY: mass rolls up exactly and matches the sum of parts', async () => {
+  asmScene();
+  const st = useStore.getState();
+  const id = st.createAssembly('stack', ['base', 'post', 'cap']);
+  const r = await ASM.assemblyMass(id);
+  assert.equal(r.components, 3); assert.equal(r.exact, 3);
+  const parts = await Promise.all(['base', 'post', 'cap'].map((i) => measureBody(useStore.getState().meshes.find((m) => m.id === i))));
+  const sum = parts.reduce((a, p) => a + p.mass_g, 0);
+  assert.ok(Math.abs(r.mass_g - sum) < 0.01, `${r.mass_g} vs ${sum}`);
+});
+
+await check('ASSEMBLY: exploding moves the view, never the model', () => {
+  asmScene();
+  const before = JSON.stringify(useStore.getState().meshes.map((m) => m.position));
+  const off = ASM.explodedOffsets(1);
+  assert.ok(Object.keys(off).length === 4, 'every body gets an offset');
+  assert.ok(Object.values(off).some((o) => Math.hypot(...o) > 0.1), 'offsets must be non-trivial');
+  assert.equal(JSON.stringify(useStore.getState().meshes.map((m) => m.position)), before, 'positions untouched');
+  assert.deepEqual(ASM.explodedOffsets(0), {}, 'factor 0 = assembled');
+});
+
+await check('ASSEMBLY: exact interference finds the pass-through, skips attached pairs', async () => {
+  asmScene();
+  // sink the post into the base so they genuinely overlap
+  useStore.setState({ meshes: useStore.getState().meshes.map((m) => (m.id === 'post' ? { ...m, position: [0, 0.3, 0] } : m)) });
+  const r = await ASM.interferenceReport({ clearanceMm: 0.5 });
+  assert.ok(!r.ok);
+  const hit = r.overlaps.find((o) => (o.a === 'base' && o.b === 'post') || (o.a === 'post' && o.b === 'base'));
+  assert.ok(hit, JSON.stringify(r.overlaps));
+  assert.equal(hit.method, 'exact');
+  // declare it attached → expected to touch → skipped
+  useStore.getState().attachMesh?.('post', 'base', false);
+  useStore.setState({ meshes: useStore.getState().meshes.map((m) => (m.id === 'post' ? { ...m, attachedTo: 'base' } : m)) });
+  const r2 = await ASM.interferenceReport({ clearanceMm: 0.5 });
+  assert.ok(!r2.overlaps.some((o) => o.a === 'post' || o.b === 'post'), 'attached pair must be skipped');
+});
+
+await check('ASSEMBLY: BOM collapses identical bodies and prices only catalogue parts', async () => {
+  asmScene();
+  useStore.setState({ meshes: [...useStore.getState().meshes,
+    { id: 'far2', kind: 'box', label: 'far part 2', position: [4, 0, 0], scale: 0.3, material: 'pla' },
+    { id: 'p1', kind: 'part', partId: 'led-5mm', label: 'LED', position: [5, 0, 0], size: [0.06, 0.1, 0.06], mm: [5, 8, 5] },
+  ] });
+  const b = await ASM.assemblyBOM();
+  const boxes = b.rows.find((r) => r.qty === 2 && /box/.test(r.description));
+  assert.ok(boxes, 'two identical boxes must be one line ×2: ' + b.rows.map((r) => r.qty + ' ' + r.description).join(' | '));
+  const led = b.rows.find((r) => r.partNumber === 'led-5mm');
+  assert.ok(led && led.unitPrice > 0, 'catalogue part carries a price');
+  assert.equal(boxes.unitPrice, null, 'a printed body has no price');
+  assert.ok(b.totalMass_g > 0);
+  const csv = ASM.bomToCsv(b);
+  assert.ok(csv.split('\n').length === b.rows.length + 2, 'header + rows + total');
+  assert.ok(/"TOTAL"/.test(csv));
 });
 
 console.log('');

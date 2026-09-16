@@ -28,16 +28,21 @@ export async function meshToShape(mesh) {
     case 'plane':
       return new oc.BRepPrimAPI_MakeBox_2(new oc.gp_Pnt_3(-w / 2, -h / 2, -d / 2), w, h, d).Shape();
     case 'cylinder': {
-      const s = new oc.BRepPrimAPI_MakeCylinder_1(w / 2, h).Shape();
-      // three's cylinder is centred on its axis; OCCT's sits on the XY plane.
-      const tr = new oc.gp_Trsf_1();
-      tr.SetTranslation_1(new oc.gp_Vec_4(0, 0, -h / 2));
-      return new oc.BRepBuilderAPI_Transform_2(s, tr, true).Shape();
+      // three.js cylinders run along Y, centred. OCCT's default runs along Z
+      // from the origin — an earlier version built it that way and every
+      // measurement against a cylinder was silently 90° off (a post sunk into
+      // a base plate read as 14 mm clear). Build on an explicit Y axis, with
+      // the base at -h/2 so it is centred like three's.
+      const ax = new oc.gp_Ax2_3(new oc.gp_Pnt_3(0, -h / 2, 0), new oc.gp_Dir_4(0, 1, 0));
+      return new oc.BRepPrimAPI_MakeCylinder_3(ax, w / 2, h).Shape();
     }
     case 'sphere':
       return new oc.BRepPrimAPI_MakeSphere_1(w / 2).Shape();
-    case 'cone':
-      return new oc.BRepPrimAPI_MakeCone_1(w / 2, 0, h).Shape();
+    case 'cone': {
+      // same axis convention: apex up along +Y, base at -h/2
+      const ax = new oc.gp_Ax2_3(new oc.gp_Pnt_3(0, -h / 2, 0), new oc.gp_Dir_4(0, 1, 0));
+      return new oc.BRepPrimAPI_MakeCone_3(ax, w / 2, 0, h).Shape();
+    }
     default:
       return null;
   }

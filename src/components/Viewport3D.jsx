@@ -14,6 +14,7 @@ import { scaleArr, packScale } from '../lib/scaleUtil.js';
 import { makeGeometry, bakedGeometry, prepareBrushGeometry, geometryScale } from '../lib/geometryFactory.js';
 import ScreenFace from './ScreenFace.jsx';
 import EdgePicker from './EdgePicker.jsx';
+import { explodedOffsets } from '../lib/assembly.js';
 import CaptureFramer from './CaptureFramer.jsx';
 
 // PBR hints derived from the mesh's assigned physical material (metal vs not).
@@ -386,6 +387,11 @@ export default function Viewport3D() {
   const gridVisible = useStore((s) => s.viewport.grid);
   // hide / isolate are display filters — the store still holds every body
   const visibleMeshes = meshes.filter((m) => !hiddenIds.includes(m.id) && (!isolatedIds || isolatedIds.includes(m.id)));
+  // exploded view: a display offset per body, recomputed when the factor or
+  // the assembly structure changes. Positions in the store are untouched.
+  const explode = useStore((s) => s.explode);
+  const assemblies = useStore((s) => s.assemblies);
+  const explodeOffsets = React.useMemo(() => explodedOffsets(explode), [explode, assemblies, meshes]); // eslint-disable-line react-hooks/exhaustive-deps
   const selectMesh = useStore((s) => s.selectMesh);
   const theme = useStore((s) => s.theme);
   const light = useStore((s) => s.lightLevel);
@@ -434,7 +440,7 @@ export default function Viewport3D() {
       />
 
       {visibleMeshes.map((m) => (
-        <MeshItem key={m.id} mesh={m} ghost={Boolean(m.groupId) && csgable(m)} />
+        <MeshItem key={m.id} mesh={explodeOffsets[m.id] ? { ...m, position: m.position.map((p, i) => p + explodeOffsets[m.id][i]) } : m} ghost={Boolean(m.groupId) && csgable(m)} />
       ))}
       {/* grouped objects render as one boolean (CSG) result: positives minus negatives */}
       {Object.entries(

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import ViewportToolbar from '../components/ViewportToolbar.jsx';
 import CopilotPanel from '../components/CopilotPanel.jsx';
+import AssemblyPanel from '../components/AssemblyPanel.jsx';
 import Viewport3D from '../components/Viewport3D.jsx';
 import MeshyPanel from '../components/MeshyPanel.jsx';
 import ThingiversePanel from '../components/ThingiversePanel.jsx';
@@ -56,6 +57,8 @@ export default function DesignWorkspace() {
     <div className="layout three-col">
       <aside className="sidebar left" style={{ flexDirection: 'column' }}>
         <CopilotPanel />
+        <div className="divider" />
+        <AssemblyPanel />
         <div className="divider" />
         <div className="seg" style={{ padding: '12px 14px 0', flexWrap: 'wrap', gap: 6 }}>
           <button className={'seg-btn' + (source === 'generate' ? ' on' : '')} onClick={() => setSource('generate')}>AI Generate</button>
