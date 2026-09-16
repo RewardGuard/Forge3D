@@ -109,6 +109,12 @@ export const useStore = create((set, get) => ({
   orchestraSetProvenance: (orchestraProvenance) => set({ orchestraProvenance }),
   orchestraSetReadiness: (orchestraReadiness) => set({ orchestraReadiness }),
   orchestraDirector: 'base',     // text provider that plans (free by default)
+  // Local AI (LM Studio / Ollama / any OpenAI-compatible server on this machine)
+  aiMode: 'cloud',               // cloud | local | hybrid
+  localAiUrl: 'http://localhost:1234/v1',
+  localAiModel: '',
+  localAiUp: null,               // last discovery: true/false/null(unknown)
+  setLocalAi: (patch) => set(patch),
   orchestraVision: 'hf-glm45v',  // vision model that inspects screenshots
   orchestraHeadroom: 'balanced', // eco | balanced | max — token/context budget
   setOrchestraDirector: (orchestraDirector) => set({ orchestraDirector }),

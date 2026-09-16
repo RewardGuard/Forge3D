@@ -20,7 +20,8 @@
     "test:full": "node scripts/benchmark-full.mjs",
     "test:kernel": "node scripts/kernel-proof.mjs",
     "design:phone": "node scripts/design-phone.mjs",
-    "test:kernel-ui": "node scripts/kernel-ui-proof.mjs"
+    "test:kernel-ui": "node scripts/kernel-ui-proof.mjs",
+    "test:local-ai": "node scripts/local-ai-proof.mjs"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",

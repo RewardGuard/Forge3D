@@ -233,6 +233,11 @@ ipcMain.handle('config:get', () => {
     hasAccount: Boolean(cfg.accountToken),
     accountEmail: cfg.accountEmail || '',
     cloudAi: cfg.cloudAi || 'claude', // which cloud AI 'base' uses — Claude by default, for every plan
+    // Local AI: an OpenAI-compatible server on this machine (LM Studio, Ollama,
+    // llama.cpp, vLLM). aiMode decides routing: cloud | local | hybrid.
+    aiMode: cfg.aiMode || 'cloud',
+    localAiUrl: cfg.localAiUrl || 'http://localhost:1234/v1',
+    localAiModel: cfg.localAiModel || '',
     // ---- first-run onboarding flags ----
     onboarded: Boolean(cfg.onboarded),
     tutorialSeen: Boolean(cfg.tutorialSeen),
@@ -384,6 +389,25 @@ ipcMain.handle('config:setCloudAi', (_e, cloudAi) => {
   cfg.cloudAi = String(cloudAi || 'claude');
   writeConfig(cfg);
   return { cloudAi: cfg.cloudAi };
+});
+
+// ── Local AI ──────────────────────────────────────────────────────────────
+ipcMain.handle('config:setLocalAi', (_e, { aiMode, localAiUrl, localAiModel } = {}) => {
+  const cfg = readConfig();
+  if (aiMode) cfg.aiMode = ['cloud', 'local', 'hybrid'].includes(aiMode) ? aiMode : 'cloud';
+  if (localAiUrl != null) cfg.localAiUrl = String(localAiUrl).trim().replace(/\/+$/, '') || 'http://localhost:1234/v1';
+  if (localAiModel != null) cfg.localAiModel = String(localAiModel).trim();
+  writeConfig(cfg);
+  return { aiMode: cfg.aiMode, localAiUrl: cfg.localAiUrl, localAiModel: cfg.localAiModel };
+});
+
+// Probe the servers people actually run. Both speak the OpenAI /v1 API, so
+// one code path serves them and anything else that does (llama.cpp, vLLM,
+// Jan, GPT4All…). A probe is a GET with a short timeout — never a generation.
+ipcMain.handle('local:discover', async () => {
+  const cfg = readConfig();
+  const d = await localAi.discover({ customUrl: cfg.localAiUrl });
+  return { ...d, configured: { url: cfg.localAiUrl, model: cfg.localAiModel, mode: cfg.aiMode || 'cloud' } };
 });
 // Enable/disable + configure cloud pairing. Pass { enabled, url, token } — token
 // is only overwritten when a non-empty value is provided (so the UI can toggle
@@ -702,6 +726,7 @@ const CODE_KEYS = {
 function providerWithKey(want, cfg) {
   if (!want || want === 'mock') return 'mock';
   if (want === 'base') return 'base';
+  if (want === 'local') return cfg.localAiUrl ? 'local' : 'mock';
   const keyField = CODE_KEYS[want];
   return keyField && cfg[keyField] ? want : 'mock';
 }
@@ -812,9 +837,35 @@ void loop() {
 // Shared provider router: takes a system + user prompt and returns generated text.
 // Returns { text, mock, provider }. When no key is configured, mock is true and
 // text is null so the caller can substitute its own placeholder.
+// One local call. Local servers need no key but the OpenAI client shape
+// requires the header, so a placeholder goes in.
+async function localGenerate({ cfg, system, userText, maxTokens }) {
+  const r = await localAi.chat({ base: cfg.localAiUrl, model: cfg.localAiModel, system, user: userText, maxTokens });
+  return { text: stripFences(r.text), mock: false, provider: 'local', model: r.model, via: 'local' };
+}
+
 async function generateText({ cfg, system, userText, provider: forced, maxTokens = 2000 }) {
-  const provider = forced || codeProviderFor(cfg);
+  const mode = cfg.aiMode || 'cloud';
+  let provider = forced || codeProviderFor(cfg);
   if (provider === 'mock') return { text: null, mock: true, provider: 'mock' };
+
+  // ── AI mode routing ─────────────────────────────────────────────────────
+  // local:  everything goes to the machine. No cloud, no keys, no allowance.
+  // hybrid: local first; if it is down or empty, the cloud/keyed provider the
+  //         caller asked for — and the result says which one answered.
+  // cloud:  unchanged.
+  if (provider === 'local' || mode === 'local') {
+    return localGenerate({ cfg, system, userText, maxTokens });
+  }
+  if (mode === 'hybrid') {
+    try {
+      const r = await localGenerate({ cfg, system, userText, maxTokens });
+      if (r.text && r.text.trim()) return { ...r, via: 'local (hybrid)' };
+    } catch (e) {
+      console.warn('[ai] hybrid: local unavailable, falling back —', String(e?.message || e).slice(0, 100));
+    }
+    // fall through to the requested cloud/keyed provider
+  }
   if (provider === 'base') {
     const text = await proxyGenerate({ system, userText, maxTokens });
     return { text, mock: false, provider: 'base' };

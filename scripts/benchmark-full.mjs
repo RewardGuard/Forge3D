@@ -26,6 +26,7 @@ import * as RD from '../src/lib/rounding.js';
 import * as SS from '../src/lib/screenSim.js';
 import * as THREE from 'three';
 import * as CP from '../src/lib/copilot.js';
+import { availableModels, modelRoute } from '../src/lib/orchestra.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -1411,6 +1412,41 @@ check('a material request maps to real bodies and a real material', async () => 
   assert.ok(r.proposal.changes.every((c) => c.to === 'aluminum'));
   assert.ok(!r.proposal.changes.some((c) => c.bodyId === 'm2'), 'the boss was to be kept');
   resetScene();
+});
+
+// ---------------------------------------------------------------------------
+section('21. LOCAL AI — mode routing can never leak to the cloud');
+
+check('LOCAL mode exposes only the local model, even with cloud keys present', () => {
+  useStore.setState({ aiMode: 'local', localAiUp: true, hasAnthropicKey: true, hasGeminiKey: true, me: { hasAccount: true, plan: 'pro' } });
+  assert.deepEqual(availableModels(), ['local'], 'nothing but local may be offered');
+  useStore.setState({ aiMode: 'cloud', hasAnthropicKey: false, hasGeminiKey: false, me: null });
+});
+
+check('HYBRID mode lists local first, then the cloud models', () => {
+  useStore.setState({ aiMode: 'hybrid', localAiUp: false, me: { hasAccount: true, plan: 'free' } });
+  const m = availableModels();
+  assert.equal(m[0], 'local', 'local is tried first');
+  assert.ok(m.includes('anthropic') && m.includes('base'), 'cloud stays available as fallback');
+  useStore.setState({ aiMode: 'cloud', me: null });
+});
+
+check('CLOUD mode offers local only when a server was actually detected', () => {
+  useStore.setState({ aiMode: 'cloud', localAiUp: false, me: { hasAccount: true } });
+  assert.ok(!availableModels().includes('local'));
+  useStore.setState({ localAiUp: true });
+  assert.ok(availableModels().includes('local'));
+  useStore.setState({ localAiUp: null, me: null });
+});
+
+check('modelRoute explains local honestly, up or down', () => {
+  useStore.setState({ localAiUp: true, localAiUrl: 'http://localhost:1234/v1', localAiModel: 'qwen' });
+  const up = modelRoute('local');
+  assert.ok(up.reachable && /this machine/.test(up.via) && /nothing leaves/i.test(up.detail));
+  useStore.setState({ localAiUp: false });
+  const down = modelRoute('local');
+  assert.ok(!down.reachable && /LM Studio|Ollama/.test(down.detail));
+  useStore.setState({ localAiUp: null });
 });
 
 // ---------------------------------------------------------------------------

@@ -386,13 +386,17 @@ async function genericLoop(goal, headroom) {
 // server holds an Anthropic key and can serve claude-sonnet-5, but the client
 // never knew. An entitled account (Pro or trial) can route the cloud-served
 // models WITHOUT pasting a key, so those count as available too.
-function availableModels() {
+export function availableModels() {
   const s = S();
   // Any Forge3D Cloud account reaches the cloud-served models — the free plan
   // has a monthly token allowance, not a smaller model list. Gating this on
   // "pro" made a fresh signup look like it had no AI at all.
   const hasAccount = Boolean(s.me?.hasAccount || s.me?.email);
+  // A local server is a first-class model. In 'local' mode it is the ONLY
+  // one, so a run can never quietly reach the cloud when the user chose not to.
+  if (s.aiMode === 'local') return ['local'];
   const ranked = [
+    ['local', s.aiMode === 'hybrid' || s.localAiUp === true],
     ['anthropic', s.hasAnthropicKey || hasAccount],
     ['gemini', s.hasGeminiKey || hasAccount],
     ['groq', s.hasGroqKey || hasAccount],
@@ -415,6 +419,11 @@ export function modelRoute(id) {
     glm: s.hasGlmKey, mistral: s.hasMistralKey, openrouter: s.hasOpenrouterKey,
   }[id];
   if (ownKey) return { reachable: true, via: 'your API key', detail: 'Billed to your own provider account.' };
+  if (id === 'local') {
+    return s.localAiUp === false
+      ? { reachable: false, via: null, detail: `No local server answering at ${s.localAiUrl}. Start LM Studio or Ollama.`, fix: 'start_local' }
+      : { reachable: true, via: 'this machine', detail: `${s.localAiModel || 'first loaded model'} at ${s.localAiUrl} — no key, no allowance, nothing leaves your computer.` };
+  }
 
   const hasAccount = Boolean(s.me?.hasAccount || s.me?.email);
   const plan = s.me?.plan === 'pro' ? 'Pro' : s.me?.trial?.active ? 'trial' : 'free';

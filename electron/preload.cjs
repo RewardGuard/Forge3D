@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('forge', {
     setBridgeEnabled: (enabled) => ipcRenderer.invoke('config:setBridgeEnabled', enabled),
     setBridgeToken: (token) => ipcRenderer.invoke('config:setBridgeToken', token),
     setCloudPairing: (opts) => ipcRenderer.invoke('config:setCloudPairing', opts),
+    setLocalAi: (opts) => ipcRenderer.invoke('config:setLocalAi', opts),
   },
   claude: {
     generate: (payload) => ipcRenderer.invoke('claude:generate', payload),
@@ -41,6 +42,9 @@ contextBridge.exposeInMainWorld('forge', {
   onboarding: {
     get: () => ipcRenderer.invoke('onboarding:get'),
     set: (patch) => ipcRenderer.invoke('onboarding:set', patch),
+  },
+  localAi: {
+    discover: () => ipcRenderer.invoke('local:discover'),
   },
   device: {
     fingerprint: () => ipcRenderer.invoke('device:fingerprint'),

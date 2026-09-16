@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import LocalAiSettings from './LocalAiSettings.jsx';
 import { useStore } from '../lib/store.js';
 
 const GEN_PROVIDERS = [
@@ -397,6 +398,8 @@ export default function SettingsButton() {
                     </button>
                   ))}
                 </div>
+
+                <LocalAiSettings />
 
                 <label className="lbl">Vision (sees the 3D viewport)</label>
                 <div className="set-card">
