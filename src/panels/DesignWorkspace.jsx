@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import ViewportToolbar from '../components/ViewportToolbar.jsx';
 import Viewport3D from '../components/Viewport3D.jsx';
 import MeshyPanel from '../components/MeshyPanel.jsx';
 import ThingiversePanel from '../components/ThingiversePanel.jsx';
@@ -67,6 +68,7 @@ export default function DesignWorkspace() {
 
       <section className="viewport">
         <Viewport3D />
+        <ViewportToolbar />
         <div className="viewport-overlay row">
           <button className="btn" onClick={projectCircuitTo3D} disabled={nodeCount === 0} title="Place circuit parts at real-world scale into the 3D scene">
             ⤢ Import circuit parts ({nodeCount})

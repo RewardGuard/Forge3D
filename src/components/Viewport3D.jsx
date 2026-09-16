@@ -1,8 +1,9 @@
 import React, { useRef, useMemo, useEffect, Suspense } from 'react';
 import * as THREE from 'three';
+import { SCENE_SCALE } from '../data/parts.js';
 import { Canvas, useLoader, useThree, useFrame } from '@react-three/fiber';
 import {
-  OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment, useGLTF, TransformControls,
+  OrbitControls, Grid, PerspectiveCamera, OrthographicCamera, Edges, GizmoHelper, GizmoViewport, Environment, useGLTF, TransformControls,
   ContactShadows, SoftShadows,
 } from '@react-three/drei';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
@@ -315,16 +316,15 @@ function MeshItem({ mesh, ghost = false }) {
             depthWrite={false}
           />
         ) : (
-          <meshStandardMaterial
+          <ShadedMaterial
             color={mesh.color}
-            emissive={selected ? '#3b82f6' : '#000'}
-            emissiveIntensity={selected ? 0.4 : 0}
+            selected={selected}
             metalness={pbr.metalness}
             roughness={pbr.roughness}
-            envMapIntensity={0.9}
             side={mesh.kind === 'baked' ? THREE.DoubleSide : THREE.FrontSide}
           />
         )}
+        <ShadingEdges />
       </mesh>
     );
   }
@@ -381,6 +381,11 @@ const round = (v) => Math.round(v * 1000) / 1000;
 
 export default function Viewport3D() {
   const meshes = useStore((s) => s.meshes);
+  const hiddenIds = useStore((s) => s.viewport.hiddenIds);
+  const isolatedIds = useStore((s) => s.viewport.isolatedIds);
+  const gridVisible = useStore((s) => s.viewport.grid);
+  // hide / isolate are display filters — the store still holds every body
+  const visibleMeshes = meshes.filter((m) => !hiddenIds.includes(m.id) && (!isolatedIds || isolatedIds.includes(m.id)));
   const selectMesh = useStore((s) => s.selectMesh);
   const theme = useStore((s) => s.theme);
   const light = useStore((s) => s.lightLevel);
@@ -407,7 +412,9 @@ export default function Viewport3D() {
       />
       <Environment preset="city" />
 
-      <Grid
+      <Cameras />
+      <SectionPlane />
+      {gridVisible && <Grid
         args={[20, 20]}
         cellSize={0.1}
         cellColor="#1c2530"
@@ -416,7 +423,7 @@ export default function Viewport3D() {
         fadeDistance={18}
         infiniteGrid
         position={[0, 0, 0]}
-      />
+      />}
       <ContactShadows
         position={[0, 0.001, 0]}
         opacity={theme === 'light' ? 0.3 : 0.5}
@@ -426,7 +433,7 @@ export default function Viewport3D() {
         resolution={1024}
       />
 
-      {meshes.map((m) => (
+      {visibleMeshes.map((m) => (
         <MeshItem key={m.id} mesh={m} ghost={Boolean(m.groupId) && csgable(m)} />
       ))}
       {/* grouped objects render as one boolean (CSG) result: positives minus negatives */}
@@ -449,21 +456,105 @@ export default function Viewport3D() {
   );
 }
 
+
+// ── Shading modes ─────────────────────────────────────────────────────────
+// Display only. Wireframe / x-ray / edges change how a body is DRAWN and
+// nothing else — mass, export and the kernel never see any of this.
+function ShadedMaterial({ color, selected, metalness, roughness, side }) {
+  const shading = useStore((s) => s.viewport.shading);
+  const common = {
+    color, side,
+    emissive: selected ? '#3b82f6' : '#000',
+    emissiveIntensity: selected ? 0.4 : 0,
+  };
+  if (shading === 'wireframe') return <meshBasicMaterial {...common} wireframe />;
+  if (shading === 'xray') return <meshStandardMaterial {...common} transparent opacity={0.28} depthWrite={false} metalness={0} roughness={1} />;
+  return <meshStandardMaterial {...common} metalness={metalness} roughness={roughness} envMapIntensity={0.9} />;
+}
+function ShadingEdges() {
+  const shading = useStore((s) => s.viewport.shading);
+  if (shading !== 'edges') return null;
+  return <Edges threshold={18} color="#0f172a" />;
+}
+
+// ── Section plane ─────────────────────────────────────────────────────────
+// A global clipping plane: every material is cut by it, so the interior of an
+// assembly is visible without touching the model. Offset is in mm from the
+// origin along the chosen axis; flip reverses which half is kept.
+const MM_UNIT = SCENE_SCALE / 1000;
+function SectionPlane() {
+  const clip = useStore((s) => s.viewport.clip);
+  const { gl } = useThree();
+  useEffect(() => {
+    if (!clip.enabled) { gl.clippingPlanes = []; gl.localClippingEnabled = false; return; }
+    // three clips every point where n·p + c < 0. To KEEP the half below the
+    // offset along the axis, the normal points down that axis and c = offset;
+    // flip reverses both. (Worked example: axis y, offset o, no flip:
+    // n = (0,-1,0), c = o → a point with y < o gives -y + o > 0 → kept.)
+    const axisVec = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[clip.axis] || [0, 1, 0];
+    const sign = clip.flip ? 1 : -1;
+    const o = clip.offsetMm * MM_UNIT;
+    const plane = new THREE.Plane(new THREE.Vector3(...axisVec).multiplyScalar(sign), -sign * o);
+    gl.clippingPlanes = [plane];
+    gl.localClippingEnabled = true;
+    return () => { gl.clippingPlanes = []; gl.localClippingEnabled = false; };
+  }, [gl, clip.enabled, clip.axis, clip.offsetMm, clip.flip]);
+  if (!clip.enabled) return null;
+  // visible indicator: a translucent quad on the cut
+  const rot = { x: [0, Math.PI / 2, 0], y: [-Math.PI / 2, 0, 0], z: [0, 0, 0] }[clip.axis];
+  const pos = { x: [clip.offsetMm * MM_UNIT, 0, 0], y: [0, clip.offsetMm * MM_UNIT, 0], z: [0, 0, clip.offsetMm * MM_UNIT] }[clip.axis];
+  return (
+    <mesh position={pos} rotation={rot}>
+      <planeGeometry args={[6, 6]} />
+      <meshBasicMaterial color="#f59e0b" transparent opacity={0.08} side={THREE.DoubleSide} depthWrite={false} />
+    </mesh>
+  );
+}
+
+// ── Cameras ───────────────────────────────────────────────────────────────
+// Orthographic is what engineering drawings use: parallel lines stay
+// parallel, so a front view is a true front view and dimensions read
+// honestly. Both cameras coexist; makeDefault picks which one draws.
+function Cameras() {
+  const projection = useStore((s) => s.viewport.projection);
+  const { size } = useThree();
+  const ortho = projection === 'orthographic';
+  // zoom such that ~8 scene units fill the view, matching the perspective framing
+  const zoom = Math.min(size.width, size.height) / 8;
+  return (
+    <>
+      <PerspectiveCamera makeDefault={!ortho} position={[3.2, 2.6, 3.2]} fov={45} near={0.01} far={500} />
+      <OrthographicCamera makeDefault={ortho} position={[3.2, 2.6, 3.2]} zoom={zoom} near={-500} far={500} />
+    </>
+  );
+}
+
 // Snaps the camera to a preset angle when the `set_view` tool bumps cameraView.
 // Additive + one-shot (acts only when the request timestamp changes), so it never
 // fights the user's OrbitControls.
+// Axis-aligned for the six standard views (so orthographic projection gives
+// a true drawing view), and the classic isometric.
 const VIEW_DIRS = {
-  front: [0, 1, 4], back: [0, 1, -4], left: [-4, 1, 0], right: [4, 1, 0],
-  top: [0, 4.2, 0.001], iso: [3.2, 2.6, 3.2],
+  front: [0, 0.0001, 4.6], back: [0, 0.0001, -4.6], left: [-4.6, 0.0001, 0], right: [4.6, 0.0001, 0],
+  top: [0, 4.6, 0.0001], bottom: [0, -4.6, 0.0001], iso: [3.2, 2.6, 3.2],
 };
 function CameraRig() {
   const cameraView = useStore((s) => s.cameraView);
+  const bookmarkRequest = useStore((s) => s.bookmarkRequest);
+  const addBookmark = useStore((s) => s.addBookmark);
+  const seenBm = useRef(0);
   const { camera, controls } = useThree();
   const applied = useRef(0);
   useFrame(() => {
+    if (bookmarkRequest && bookmarkRequest.t !== seenBm.current) {
+      seenBm.current = bookmarkRequest.t;
+      const tgt = controls?.target ? [controls.target.x, controls.target.y, controls.target.z] : [0, 0, 0];
+      addBookmark(bookmarkRequest.name, [camera.position.x, camera.position.y, camera.position.z], tgt);
+    }
     if (!cameraView || cameraView.t === applied.current) return;
     applied.current = cameraView.t;
-    const p = VIEW_DIRS[cameraView.view] || VIEW_DIRS.iso;
+    const p = cameraView.view === 'bookmark' && cameraView.position ? cameraView.position : (VIEW_DIRS[cameraView.view] || VIEW_DIRS.iso);
+    if (cameraView.view === 'bookmark' && cameraView.target && controls) controls.target.set(...cameraView.target);
     camera.position.set(p[0], p[1], p[2]);
     camera.lookAt(0, 0, 0);
     if (controls) { controls.target.set(0, 0, 0); controls.update(); }

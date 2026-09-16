@@ -24,6 +24,7 @@ import * as MC from '../src/lib/modelContext.js';
 import * as CI from '../src/lib/cadIntent.js';
 import * as RD from '../src/lib/rounding.js';
 import * as SS from '../src/lib/screenSim.js';
+import * as THREE from 'three';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -1230,6 +1231,94 @@ check('upscaled image data keeps square pixels', () => {
   let lit = 0;
   for (let y = 12; y < 16; y++) for (let x = 12; x < 16; x++) if (img.data[(y * 512 + x) * 4]) lit++;
   assert.equal(lit, 16);
+});
+
+// ---------------------------------------------------------------------------
+section('19. PROFESSIONAL VIEWPORT — display state never touches the model');
+
+const vpScene = () => {
+  useStore.setState({ meshes: [
+    { id: 'a', kind: 'box', label: 'a', position: [0, 0, 0], scale: 1 },
+    { id: 'b', kind: 'box', label: 'b', position: [1, 0, 0], scale: 1 },
+    { id: 'c', kind: 'box', label: 'c', position: [2, 0, 0], scale: 1 },
+  ], selectedMeshId: 'b', selectedMeshIds: ['b'] });
+  useStore.getState().showAll();
+};
+
+check('hide removes from view but never from the model', () => {
+  vpScene();
+  useStore.getState().hideSelected();
+  const st = useStore.getState();
+  assert.deepEqual(st.viewport.hiddenIds, ['b']);
+  assert.equal(st.meshes.length, 3, 'the body must still exist');
+  assert.equal(st.selectedMeshId, null, 'a hidden body cannot stay selected');
+});
+
+check('isolate keeps only the selection, show-all restores', () => {
+  vpScene();
+  useStore.getState().isolateSelected();
+  assert.deepEqual(useStore.getState().viewport.isolatedIds, ['b']);
+  useStore.getState().showAll();
+  const v = useStore.getState().viewport;
+  assert.equal(v.isolatedIds, null); assert.deepEqual(v.hiddenIds, []);
+});
+
+check('isolate with nothing selected is a no-op, not a blank screen', () => {
+  vpScene();
+  useStore.setState({ selectedMeshId: null, selectedMeshIds: [] });
+  useStore.getState().isolateSelected();
+  assert.equal(useStore.getState().viewport.isolatedIds, null);
+});
+
+check('shading and projection are pure display flags', () => {
+  vpScene();
+  const before = JSON.stringify(useStore.getState().meshes);
+  useStore.getState().setViewport({ shading: 'wireframe', projection: 'orthographic' });
+  assert.equal(JSON.stringify(useStore.getState().meshes), before, 'no mesh may change');
+  useStore.getState().setViewport({ shading: 'shaded', projection: 'perspective' });
+});
+
+check('section plane math keeps the intended half', () => {
+  // mirror of SectionPlane: keep y < offset unless flipped
+  const plane = (axis, offset, flip) => {
+    const v = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[axis];
+    const sign = flip ? 1 : -1;
+    return new THREE.Plane(new THREE.Vector3(...v).multiplyScalar(sign), -sign * offset);
+  };
+  const kept = (p, pt) => p.distanceToPoint(new THREE.Vector3(...pt)) >= 0;  // three clips where < 0
+  const p = plane('y', 2, false);
+  assert.ok(kept(p, [0, 1, 0]), 'below the cut is kept');
+  assert.ok(!kept(p, [0, 3, 0]), 'above the cut is clipped');
+  const f = plane('y', 2, true);
+  assert.ok(!kept(f, [0, 1, 0]) && kept(f, [0, 3, 0]), 'flip reverses it');
+  const px = plane('x', -1, false);
+  assert.ok(kept(px, [-2, 0, 0]) && !kept(px, [0, 0, 0]), 'works on x with a negative offset');
+});
+
+check('bookmarks store and recall a camera, and are replaced by name', () => {
+  vpScene();
+  const st = useStore.getState();
+  st.addBookmark('front-close', [0, 0, 2], [0, 0, 0]);
+  st.addBookmark('front-close', [0, 0, 3], [0, 0, 0]);   // same name → replace
+  assert.equal(useStore.getState().viewport.bookmarks.length, 1);
+  assert.deepEqual(useStore.getState().viewport.bookmarks[0].position, [0, 0, 3]);
+  useStore.getState().recallBookmark('front-close');
+  const cv = useStore.getState().cameraView;
+  assert.equal(cv.view, 'bookmark'); assert.deepEqual(cv.position, [0, 0, 3]);
+  useStore.getState().recallBookmark('nope');
+  assert.equal(useStore.getState().cameraView.t, cv.t, 'unknown name must not move the camera');
+  useStore.getState().removeBookmark('front-close');
+  assert.equal(useStore.getState().viewport.bookmarks.length, 0);
+});
+
+check('clip patches merge without clobbering', () => {
+  vpScene();
+  useStore.getState().setClip({ axis: 'z', offsetMm: 12 });
+  useStore.getState().setClip({ enabled: true });
+  const c = useStore.getState().viewport.clip;
+  assert.equal(c.axis, 'z'); assert.equal(c.offsetMm, 12); assert.equal(c.enabled, true);
+  useStore.getState().setClip({ enabled: false, offsetMm: 0, axis: 'y', flip: false });
+  resetScene();
 });
 
 // ---------------------------------------------------------------------------

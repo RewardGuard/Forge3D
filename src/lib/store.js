@@ -150,7 +150,44 @@ export const useStore = create((set, get) => ({
     }),
 
   // ---- camera view request (set_view tool → CameraRig snaps the angle) ----
-  cameraView: null, // { view:'front|back|left|right|top|iso', t:timestamp } | null
+  // ── Professional viewport ────────────────────────────────────────────────
+  // Projection, shading, section plane, visibility and bookmarks. Everything
+  // here is a DISPLAY choice: it never touches geometry, mass or export.
+  viewport: {
+    projection: 'perspective',   // perspective | orthographic
+    shading: 'shaded',           // shaded | edges | wireframe | xray
+    clip: { enabled: false, axis: 'y', offsetMm: 0, flip: false },
+    grid: true,
+    hiddenIds: [],               // hidden by the user
+    isolatedIds: null,           // when set, ONLY these are drawn
+    bookmarks: [],               // { name, position, target }
+  },
+  setViewport: (patch) => set((s) => ({ viewport: { ...s.viewport, ...patch } })),
+  setClip: (patch) => set((s) => ({ viewport: { ...s.viewport, clip: { ...s.viewport.clip, ...patch } } })),
+  hideSelected: () => set((s) => {
+    const ids = s.selectedMeshIds?.length ? s.selectedMeshIds : (s.selectedMeshId ? [s.selectedMeshId] : []);
+    return { viewport: { ...s.viewport, hiddenIds: [...new Set([...s.viewport.hiddenIds, ...ids])] }, selectedMeshId: null, selectedMeshIds: [] };
+  }),
+  isolateSelected: () => set((s) => {
+    const ids = s.selectedMeshIds?.length ? s.selectedMeshIds : (s.selectedMeshId ? [s.selectedMeshId] : []);
+    return ids.length ? { viewport: { ...s.viewport, isolatedIds: ids } } : {};
+  }),
+  showAll: () => set((s) => ({ viewport: { ...s.viewport, hiddenIds: [], isolatedIds: null } })),
+  addBookmark: (name, position, target) => set((s) => ({
+    viewport: { ...s.viewport, bookmarks: [...s.viewport.bookmarks.filter((b) => b.name !== name), { name, position, target }] },
+  })),
+  // The toolbar lives outside the Canvas and cannot read the camera; it asks,
+  // and CameraRig (inside) answers with the real position + orbit target.
+  bookmarkRequest: null,
+  requestBookmark: (name) => set({ bookmarkRequest: { name, t: Date.now() } }),
+  removeBookmark: (name) => set((s) => ({ viewport: { ...s.viewport, bookmarks: s.viewport.bookmarks.filter((b) => b.name !== name) } })),
+  // a bookmark recall is a camera move; CameraRig consumes it like a view
+  recallBookmark: (name) => set((s) => {
+    const b = s.viewport.bookmarks.find((x) => x.name === name);
+    return b ? { cameraView: { view: 'bookmark', position: b.position, target: b.target, t: Date.now() } } : {};
+  }),
+
+  cameraView: null, // { view:'front|back|left|right|top|bottom|iso|bookmark', t:timestamp } | null
   setCameraView: (view) => set({ cameraView: { view, t: Date.now() } }),
 
   // ---- UI / theme ----

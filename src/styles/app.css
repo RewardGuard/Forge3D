@@ -872,3 +872,22 @@ select:hover { border-color: var(--hover-border); }
 .cw-lcd { margin: 4px 0; padding: 6px 8px; background: #6c3; color: #123; border-radius: 4px; font-family: 'SF Mono', ui-monospace, Menlo, monospace; }
 .cw-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; text-align: center; padding: 40px; }
 .cw-empty .link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
+
+/* ── Viewport toolbar ──────────────────────────────────────────────────── */
+.vpt { position: absolute; right: 16px; top: 16px; z-index: 5; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.vpt-tabs { display: flex; gap: 2px; background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: 8px; padding: 3px; }
+.vpt-tab { border: none; background: transparent; color: inherit; font-size: 11.5px; padding: 5px 10px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.vpt-tab:hover { background: var(--panel-2); }
+.vpt-tab.on { background: var(--accent); color: #fff; }
+.vpt-panel { background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-width: 300px; max-width: 380px; display: flex; flex-direction: column; gap: 6px; }
+.vpt-row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.vpt-btn { border: 1px solid var(--border); background: var(--panel-2); color: inherit; font-size: 11.5px; padding: 5px 9px; border-radius: 5px; cursor: pointer; }
+.vpt-btn:hover:not(:disabled) { border-color: var(--accent); }
+.vpt-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.vpt-btn:disabled { opacity: .4; cursor: default; }
+.vpt-btn.ghost { background: transparent; border-color: transparent; }
+.vpt-note { margin: 0; font-size: 11px; opacity: .7; line-height: 1.4; }
+.vpt-bm { justify-content: space-between; }
+.vpt-bm .vpt-btn:first-child { flex: 1; text-align: left; }
