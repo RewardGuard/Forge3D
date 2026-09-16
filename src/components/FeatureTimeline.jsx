@@ -59,18 +59,18 @@ export default function FeatureTimeline({ mesh }) {
                 </>
               )}
               {(f.type === 'fillet' || f.type === 'chamfer') && (
-                <button className="ft-btn" title="Re-pick which edges this feature applies to"
-                  onClick={() => { setEdgePickActive(true); }}>
-                  {f.params.edgeIndices?.length ? `${f.params.edgeIndices.length} edges` : 'all edges'} ◈
-                </button>
-                {pickingThis && (
-                  <>
+                <>
+                  <button className="ft-btn" title="Re-pick which edges this feature applies to"
+                    onClick={() => { setEdgePickActive(true); }}>
+                    {f.params.edgeIndices?.length ? `${f.params.edgeIndices.length} edges` : 'all edges'} ◈
+                  </button>
+                  {pickingThis && (
                     <button className="ft-btn" style={{ color: 'var(--accent)' }} title="Apply the edges picked in the 3D view to this feature"
                       onClick={() => { updateFeature(mesh.id, f.id, { edgeIndices: edgePick.indices.length ? [...edgePick.indices] : null }); clearEdgePick(); }}>
                       ✓ use {edgePick.indices.length || 'all'}
                     </button>
-                  </>
-                )}
+                  )}
+                </>
               )}
             </div>
             {failed && (
