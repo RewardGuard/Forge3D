@@ -343,6 +343,15 @@ export const useStore = create((set, get) => ({
       });
       return { meshes: keep, selectedMeshId: id, selectedMeshIds: [id] };
     }),
+  // ── Constraints (assembly mates) ────────────────────────────────────────
+  constraints: [],
+  addConstraint: (c) => set((s) => ({ constraints: [...s.constraints, c] })),
+  updateConstraint: (id, patch) => set((s) => ({ constraints: s.constraints.map((c) => (c.id === id ? { ...c, ...patch, params: { ...c.params, ...(patch.params || {}) } } : c)) })),
+  toggleConstraint: (id) => set((s) => ({ constraints: s.constraints.map((c) => (c.id === id ? { ...c, enabled: !c.enabled } : c)) })),
+  removeConstraint: (id) => set((s) => ({ constraints: s.constraints.filter((c) => c.id !== id) })),
+  constraintReport: null,
+  setConstraintReport: (constraintReport) => set({ constraintReport }),
+
   // ── Assemblies ──────────────────────────────────────────────────────────
   // assemblies[id] = { id, name, parentId }; a mesh's assemblyId points at
   // one (or nothing = root). The tree is derived in assembly.js.

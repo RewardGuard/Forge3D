@@ -974,3 +974,17 @@ select:hover { border-color: var(--hover-border); }
 .ft-params label { display: flex; align-items: center; gap: 4px; font-size: 11.5px; }
 .ft-params input[type=number] { width: 64px; padding: 2px 4px; }
 .ft-err { margin: 4px 0 0; color: #dc2626; font-size: 11.5px; line-height: 1.4; }
+
+/* ── Constraint panel ─────────────────────────────────────────────────── */
+.cn { display: flex; flex-direction: column; gap: 4px; }
+.cn-row { border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+.cn-row.off { opacity: .5; } .cn-row.conflict { border-color: #dc2626; }
+.cn-head { display: flex; align-items: center; gap: 6px; }
+.cn-title { flex: 1; font-weight: 600; }
+.cn-badge { font-size: 10px; text-transform: uppercase; color: #dc2626; border: 1px solid #dc2626; border-radius: 999px; padding: 0 6px; }
+.cn-params { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 3px; }
+.cn-params label { display: flex; align-items: center; gap: 3px; font-size: 11.5px; }
+.cn-params input[type=number] { width: 58px; padding: 2px 4px; } .cn-params select { padding: 2px 4px; }
+.cn-report { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+.cn-report.ok { border-color: #16a34a; } .cn-report.warn { border-color: #d97706; } .cn-report.err { border-color: #dc2626; }
+.cn-report p { margin: 3px 0; line-height: 1.45; }

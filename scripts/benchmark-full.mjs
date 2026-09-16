@@ -27,6 +27,7 @@ import * as SS from '../src/lib/screenSim.js';
 import * as THREE from 'three';
 import * as CP from '../src/lib/copilot.js';
 import { availableModels, modelRoute } from '../src/lib/orchestra.js';
+import * as K from '../src/lib/constraints.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -67,16 +68,23 @@ const failures = [];
 const timings = [];
 const C = { g: '\x1b[32m', r: '\x1b[31m', d: '\x1b[2m', b: '\x1b[1m', x: '\x1b[0m' };
 
-function check(name, fn) {
+// Every check runs SEQUENTIALLY and async ones are awaited. The previous
+// harness called fn() and moved on, so an async test yielded, later sync
+// tests mutated the shared store underneath it, and its failure surfaced as
+// an unhandled rejection AFTER the summary had already printed "0 failed".
+const queue = [];
+function check(name, fn) { queue.push({ kind: 'check', name, fn }); }
+async function runCheck({ name, fn }) {
   try {
-    fn();
+    await fn();
     pass++; console.log(`  ${C.g}✓${C.x} ${name}`);
   } catch (e) {
     fail++; failures.push({ name, err: String(e?.message || e).split('\n')[0] });
     console.log(`  ${C.r}✗${C.x} ${name} — ${String(e?.message || e).split('\n')[0]}`);
   }
 }
-function bench(name, iters, budgetMs, fn) {
+function bench(name, iters, budgetMs, fn) { queue.push({ kind: 'bench', name, iters, budgetMs, fn }); }
+function runBench({ name, iters, budgetMs, fn }) {
   const t0 = process.hrtime.bigint();
   for (let i = 0; i < iters; i++) fn(i);
   const per = Number(process.hrtime.bigint() - t0) / 1e6 / iters;
@@ -84,7 +92,7 @@ function bench(name, iters, budgetMs, fn) {
   if (per <= budgetMs) { pass++; console.log(`  ${C.g}✓${C.x} ${name} ${C.d}${per.toFixed(3)}ms/op × ${iters} (budget ${budgetMs}ms)${C.x}`); }
   else { fail++; failures.push({ name, err: `too slow: ${per.toFixed(3)}ms/op > ${budgetMs}ms` }); console.log(`  ${C.r}✗${C.x} ${name} ${C.r}${per.toFixed(3)}ms/op > ${budgetMs}ms budget${C.x}`); }
 }
-const section = (t) => console.log(`\n${C.b}${t}${C.x}`);
+const section = (t) => queue.push({ kind: 'section', t });
 // values an LLM or a corrupt project file realistically produces
 const HOSTILE = [undefined, null, '', 0, -1, NaN, Infinity, -Infinity, {}, [], 'null', '[]', true,
   '../../etc/passwd', '<script>alert(1)</script>', ' ', 'x'.repeat(10000)];
@@ -1450,6 +1458,92 @@ check('modelRoute explains local honestly, up or down', () => {
 });
 
 // ---------------------------------------------------------------------------
+section('22. CONSTRAINT SOLVER — mates solve, DOF counted, conflicts explained');
+
+const UNIT_MM = 83.33;
+const cnA = () => ({ id: 'A', label: 'base', kind: 'box', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 0.2, 1] });
+const cnB = () => ({ id: 'B', label: 'pin', kind: 'cylinder', position: [0.5, 0.7, 0.3], rotation: [0.3, 0.2, 0.1], scale: [0.1, 0.6, 0.1] });
+
+check('a pin mates onto a base and stands concentric — 1 DOF (its own spin) remains', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y' }), K.newConstraint('concentric', 'A', 'B', { axis: 'y' })], [cnA(), cnB()]);
+  assert.equal(r.status, 'under');
+  assert.equal(r.report.remainingDof, 1, 'a pin in a hole can still spin');
+  const p = r.poses.B.position.map((v) => v * UNIT_MM);
+  assert.ok(Math.abs(p[0]) < 0.05 && Math.abs(p[2]) < 0.05, 'centred on the base axis: ' + p);
+  assert.ok(Math.abs(p[1] - (8.333 + 25)) < 0.05, 'base half 8.33 + pin half 25 = 33.33: ' + p[1]);
+  assert.ok(r.residual < 1e-4);
+});
+
+check('a bare distance is under-constrained and honest about the 5 free DOF', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('distance', 'A', 'B', { mm: 40 })], [cnA(), cnB()]);
+  assert.equal(r.status, 'under'); assert.equal(r.report.remainingDof, 5);
+  assert.ok(Math.abs(Math.hypot(...r.poses.B.position.map((v) => v * UNIT_MM)) - 40) < 0.05);
+});
+
+check('two incompatible distances are a CONFLICT, named, with the compromise residual', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('distance', 'A', 'B', { mm: 20 }), K.newConstraint('distance', 'A', 'B', { mm: 30 })], [cnA(), cnB()]);
+  assert.equal(r.status, 'conflicting'); assert.equal(r.ok, false);
+  assert.equal(r.report.conflicts.length, 2, 'both distances carry residual');
+  assert.ok(/cannot all hold/.test(r.report.message) && /20 mm/.test(r.report.message) && /30 mm/.test(r.report.message));
+  assert.ok(Math.abs(r.residual - 10 / Math.SQRT2) < 0.1, 'compromise at 25 → each off by 5 → norm 7.07');
+});
+
+check('a conflicting solve is never applied to the model', () => {
+  useStore.setState({ meshes: [cnA(), cnB()], constraints: [K.newConstraint('fixed', 'A'), K.newConstraint('distance', 'A', 'B', { mm: 20 }), K.newConstraint('distance', 'A', 'B', { mm: 30 })] });
+  const before = JSON.stringify(useStore.getState().meshes.find((m) => m.id === 'B').position);
+  const r = K.solveAndApply({ apply: true });
+  assert.equal(r.ok, false);
+  assert.equal(JSON.stringify(useStore.getState().meshes.find((m) => m.id === 'B').position), before, 'a compromise must not be written');
+  useStore.setState({ meshes: [], constraints: [] });
+});
+
+check('repeated constraints are reported redundant, not conflicting', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('coincident', 'A', 'B'), K.newConstraint('parallel', 'A', 'B', { axis: 'y' }), K.newConstraint('parallel', 'A', 'B', { axis: 'y' }), K.newConstraint('angle', 'A', 'B', { axis: 'x', deg: 0 })], [cnA(), cnB()]);
+  assert.equal(r.status, 'over');
+  assert.ok(r.report.redundant >= 1);
+  assert.equal(r.report.remainingDof, 0);
+  assert.ok(r.residual < 1e-3);
+});
+
+check('perpendicular and angle constraints land on the right angle', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('coincident', 'A', 'B'), K.newConstraint('perpendicular', 'A', 'B', { axis: 'y' })], [cnA(), cnB()]);
+  assert.ok(r.residual < 1e-3);
+  const rot = r.poses.B.rotation;
+  // B's y-axis after rotation must be ⊥ to world y
+  const cx = Math.cos(rot[0]), sx = Math.sin(rot[0]), cy = Math.cos(rot[1]), sy = Math.sin(rot[1]);
+  const yAxis = [sx * sy, cx, sx * cy].map(Math.abs);   // rough: y-component of rotated y is cos(x)cos(z)…
+  const a = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('coincident', 'A', 'B'), K.newConstraint('angle', 'A', 'B', { axis: 'y', deg: 30 })], [cnA(), cnB()]);
+  assert.ok(a.residual < 1e-3, 'angle 30° solvable');
+});
+
+check('alongAxis places B at an exact world offset', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('alongAxis', 'A', 'B', { axis: 'x', mm: 75 })], [cnA(), cnB()]);
+  assert.ok(Math.abs(r.poses.B.position[0] * UNIT_MM - 75) < 0.05);
+});
+
+check('all-fixed reports satisfied and moves nothing', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('fixed', 'B')], [cnA(), cnB()]);
+  assert.equal(r.status, 'satisfied'); assert.deepEqual(r.poses, {});
+});
+
+check('a constraint to a missing body is ignored, not fatal', () => {
+  const r = K.solveConstraints([K.newConstraint('distance', 'A', 'GHOST', { mm: 10 })], [cnA()]);
+  assert.equal(r.status, 'none');
+});
+
+check('describeConstraint reads like an engineer wrote it', () => {
+  const L = (id) => ({ A: 'base', B: 'pin' })[id];
+  assert.equal(K.describeConstraint(K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y' }), L), 'base[+y] ▬ pin[-y]');
+  assert.equal(K.describeConstraint(K.newConstraint('distance', 'A', 'B', { mm: 12.5 }), L), 'base ↔ pin = 12.5 mm');
+  assert.equal(K.describeConstraint(K.newConstraint('fixed', 'A'), L), 'base fixed');
+});
+
+// ---------------------------------------------------------------------------
+for (const item of queue) {
+  if (item.kind === 'section') console.log(`\n${C.b}${item.t}${C.x}`);
+  else if (item.kind === 'bench') runBench(item);
+  else await runCheck(item);
+}
 console.log('\n' + '─'.repeat(64));
 if (timings.length) {
   console.log(`${C.b}Slowest operations${C.x}`);
