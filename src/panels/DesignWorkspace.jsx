@@ -1,4 +1,8 @@
 import React, { useState } from 'react';
+import ViewportToolbar from '../components/ViewportToolbar.jsx';
+import CopilotPanel from '../components/CopilotPanel.jsx';
+import AssemblyPanel from '../components/AssemblyPanel.jsx';
+import ConstraintPanel from '../components/ConstraintPanel.jsx';
 import Viewport3D from '../components/Viewport3D.jsx';
 import MeshyPanel from '../components/MeshyPanel.jsx';
 import ThingiversePanel from '../components/ThingiversePanel.jsx';
@@ -53,6 +57,12 @@ export default function DesignWorkspace() {
   return (
     <div className="layout three-col">
       <aside className="sidebar left" style={{ flexDirection: 'column' }}>
+        <CopilotPanel />
+        <div className="divider" />
+        <AssemblyPanel />
+        <div className="divider" />
+        <ConstraintPanel />
+        <div className="divider" />
         <div className="seg" style={{ padding: '12px 14px 0', flexWrap: 'wrap', gap: 6 }}>
           <button className={'seg-btn' + (source === 'generate' ? ' on' : '')} onClick={() => setSource('generate')}>AI Generate</button>
           <button className={'seg-btn' + (source === 'claude' ? ' on' : '')} onClick={() => setSource('claude')}>Claude Design</button>
@@ -67,6 +77,7 @@ export default function DesignWorkspace() {
 
       <section className="viewport">
         <Viewport3D />
+        <ViewportToolbar />
         <div className="viewport-overlay row">
           <button className="btn" onClick={projectCircuitTo3D} disabled={nodeCount === 0} title="Place circuit parts at real-world scale into the 3D scene">
             ⤢ Import circuit parts ({nodeCount})

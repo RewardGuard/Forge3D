@@ -16,6 +16,7 @@
 // ============================================================================
 
 import { PART_BY_ID } from '../data/parts.js';
+import { validateDimension, MAX_COORD_MM } from './units.js';
 import { parseAgentJson } from './agentJson.js';
 
 // Detect the product pattern. ORDER MATTERS: structures and vehicles are checked
@@ -329,23 +330,45 @@ export async function generateSpec(goal, deficiencies = null) {
   return sanitizeSpec(parseAgentJson(resp.text));
 }
 
-// Fill defaults and clamp to sane maker-scale mm so a bad LLM patch can't produce
-// a 5-metre wall or a sub-millimetre body.
+// Fill defaults and validate dimensions.
+//
+// This used to clamp every dimension to 400 mm, which silently turned a
+// legitimate 1.2 m gantry into a 400 mm stub and told nobody. Forge3D has no
+// maximum object size: the only limits are geometric meaninglessness (zero /
+// non-finite) and float64's precision ceiling — see units.js. Anything we
+// cannot accept is REPORTED on spec.normalizationIssues instead of being
+// quietly rewritten, so the caller can show the user what was wrong.
 export function normalizeSpec(spec) {
-  const clamp = (v, lo, hi, d) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d);
+  const issues = [];
+  const dimOr = (v, fallback, label) => {
+    if (v == null) return null;
+    const chk = validateDimension(v, label);
+    if (chk.ok) return Number(v);
+    issues.push(chk.reason + ` — substituted ${fallback} mm`);
+    return fallback;
+  };
   for (const b of spec.bodies || []) {
     b.shape = b.shape || 'box';
     b.rot = b.rot || [0, 0, 0];
     b.material = b.material || 'pla';
     const dm = b.dims_mm || {};
-    if (dm.w != null) dm.w = clamp(dm.w, 1, 400, 50);
-    if (dm.h != null) dm.h = clamp(dm.h, 1, 400, 50);
-    if (dm.d != null) dm.d = clamp(dm.d, 1, 400, 50);
-    if (dm.r != null) dm.r = clamp(dm.r, 1, 200, 25);
+    for (const k of ['w', 'h', 'd']) {
+      if (dm[k] != null) dm[k] = dimOr(dm[k], 50, `${b.id || 'body'}.${k}`);
+    }
+    if (dm.r != null) dm.r = dimOr(dm.r, 25, `${b.id || 'body'}.r`);
     b.dims_mm = dm;
-    b.pos_mm = (b.pos_mm || [0, 0, 0]).map((n) => clamp(n, -400, 400, 0));
+    b.pos_mm = (b.pos_mm || [0, 0, 0]).map((n, i) => {
+      const num = Number(n);
+      if (!Number.isFinite(num)) { issues.push(`${b.id || 'body'}.pos[${i}] is not a finite number — substituted 0`); return 0; }
+      if (Math.abs(num) > MAX_COORD_MM) {
+        issues.push(`${b.id || 'body'}.pos[${i}] is ${num} mm — beyond the ${MAX_COORD_MM} mm coordinate limit; substituted 0`);
+        return 0;
+      }
+      return num;
+    });
     b.cutouts = b.cutouts || [];
   }
+  if (issues.length) spec.normalizationIssues = issues;
   spec.electronics = (spec.electronics || []).filter((e) => e.partId);
   spec.behavior = spec.behavior || [];
   return spec;

@@ -1,6 +1,13 @@
 import React from 'react';
 import { useStore } from '../lib/store.js';
 import { scaleArr, packScale, avgScale } from '../lib/scaleUtil.js';
+import { isRoundable, maxCornerRadiusMm, validateCornerRadius, trueDimsMm, CORNER_STYLES, ROUNDABLE } from '../lib/rounding.js';
+import { runKernelOp, kernelSupports, edgeCount, meshToSTEP } from '../lib/kernelBridge.js';
+import { kernelStatus, KERNEL_UNLOCKS } from '../lib/kernel.js';
+import { ScreenPreview } from './ScreenFace.jsx';
+import MeasurePanel from './MeasurePanel.jsx';
+import FeatureTimeline from './FeatureTimeline.jsx';
+import { newFeature, scheduleRegenerate } from '../lib/features.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 const AXES = ['x', 'y', 'z'];
@@ -22,6 +29,17 @@ export default function Inspector() {
   const setSpinReverse = useStore((s) => s.setSpinReverse);
   const setMeshNegative = useStore((s) => s.setMeshNegative);
   const updateMesh = useStore((s) => s.updateMesh);
+  const replaceMesh = useStore((s) => s.replaceMesh);
+  const [kOp, setKOp] = React.useState('fillet');
+  const [kVal, setKVal] = React.useState(2);
+  const [kBusy, setKBusy] = React.useState(false);
+  const [kMsg, setKMsg] = React.useState(null);
+  const [kEdges, setKEdges] = React.useState(null);
+  const edgePick = useStore((s) => s.edgePick);
+  const setEdgePickActive = useStore((s) => s.setEdgePickActive);
+  const clearEdgePick = useStore((s) => s.clearEdgePick);
+  const pickingThis = edgePick.active && edgePick.meshId === mesh?.id;
+  const pickedCount = pickingThis ? edgePick.indices.length : 0;
   const removeMesh = useStore((s) => s.removeMesh);
   const transformMode = useStore((s) => s.transformMode);
   const setTransformMode = useStore((s) => s.setTransformMode);
@@ -120,6 +138,7 @@ export default function Inspector() {
               const sc = [...scaleArr(mesh.scale)];
               sc[i] = Math.max(0.01, parseFloat(e.target.value) || 0.01);
               updateMesh(mesh.id, { scale: packScale(sc[0], sc[1], sc[2]) });
+              if (mesh.features?.length) scheduleRegenerate(mesh.id);
             }}
           />
         ))}
@@ -128,14 +147,157 @@ export default function Inspector() {
       <input
         type="range" min="0.1" max="4" step="0.05"
         value={avgScale(mesh.scale)}
-        onChange={(e) => updateMesh(mesh.id, { scale: parseFloat(e.target.value) })}
+        onChange={(e) => { updateMesh(mesh.id, { scale: parseFloat(e.target.value) }); if (mesh.features?.length) scheduleRegenerate(mesh.id); }}
       />
+
+      {/* Real corner geometry — an arc or a facet actually cut into the solid,
+          not a shader trick. The radius is validated against the body's own
+          dimensions and refuses with a reason rather than breaking silently. */}
+      {isRoundable(mesh.kind) && (() => {
+        const max = maxCornerRadiusMm(mesh);
+        const cur = Number(mesh.cornerRadius_mm) || 0;
+        const check = validateCornerRadius(mesh, cur);
+        const dims = trueDimsMm(mesh);
+        return (
+          <>
+            <div className="divider" />
+            <label className="lbl">
+              Corner radius — {cur.toFixed(2)} mm <span className="muted">(max {max.toFixed(2)} mm · {ROUNDABLE[mesh.kind]})</span>
+            </label>
+            <div className="row">
+              <input
+                type="range" min="0" max={Math.max(max, 0.01)} step={Math.max(max / 200, 0.01)}
+                value={Math.min(cur, max)}
+                onChange={(e) => updateMesh(mesh.id, { cornerRadius_mm: parseFloat(e.target.value) })}
+              />
+              <input
+                type="number" min="0" step="0.1" value={cur}
+                style={{ width: 74 }}
+                onChange={(e) => updateMesh(mesh.id, { cornerRadius_mm: parseFloat(e.target.value) || 0 })}
+              />
+            </div>
+            {!check.ok && <p className="status error small">{check.reason}</p>}
+            {check.ok && check.note && <p className="muted small">{check.note}</p>}
+            {cur > 0 && (
+              <>
+                <label className="lbl">Corner type</label>
+                <div className="seg">
+                  {Object.values(CORNER_STYLES).map((st) => (
+                    <button
+                      key={st.id}
+                      className={'seg-btn' + ((mesh.cornerStyle || 'round') === st.id ? ' on' : '')}
+                      title={st.detail}
+                      onClick={() => updateMesh(mesh.id, { cornerStyle: st.id })}
+                    >{st.label}</button>
+                  ))}
+                </div>
+                <label className="lbl">
+                  Arc segments — {mesh.cornerSegments || CORNER_STYLES[mesh.cornerStyle || 'round'].segments}
+                  <span className="muted"> (higher = smoother, heavier to export)</span>
+                </label>
+                <input
+                  type="range" min="1" max="16" step="1"
+                  value={mesh.cornerSegments || CORNER_STYLES[mesh.cornerStyle || 'round'].segments}
+                  onChange={(e) => updateMesh(mesh.id, { cornerSegments: parseInt(e.target.value, 10) })}
+                />
+                <p className="muted small">
+                  Body is {dims.map((d) => d.toFixed(1)).join(' × ')} mm. The radius is baked into the
+                  geometry at true size, so it stays circular on every axis even when the body is stretched.
+                </p>
+              </>
+            )}
+          </>
+        );
+      })()}
 
       <label className="lbl">Color</label>
       <input type="color" value={mesh.color} onChange={(e) => updateMesh(mesh.id, { color: e.target.value })} />
 
       {mesh.kind === 'part' && mesh.mm && (
         <p className="muted small">Footprint: {mesh.mm[0].toFixed(0)}×{mesh.mm[2].toFixed(0)}×{mesh.mm[1].toFixed(0)} mm (real scale)</p>
+      )}
+      {mesh.kind === 'part' && <ScreenPreview mesh={mesh} />}
+
+      {/* ── B-rep kernel ────────────────────────────────────────────────
+          These operations run in OpenCascade, on a real solid with real edge
+          topology. A radius the geometry cannot carry is REFUSED by the
+          kernel and the reason is shown — no broken geometry is ever
+          produced. The result is a baked solid, so the parametric primitive
+          is gone until you undo. */}
+      <MeasurePanel mesh={mesh} />
+
+      {kernelSupports(mesh.kind) && (
+        <>
+          <div className="divider" />
+          <label className="lbl">
+            B-rep kernel <span className="muted">(OpenCascade — real solid operations)</span>
+          </label>
+          <div className="seg">
+            {[['fillet', 'Fillet'], ['chamfer', 'Chamfer'], ['shell', 'Hollow']].map(([id, label]) => (
+              <button key={id} className={'seg-btn' + (kOp === id ? ' on' : '')} onClick={() => { setKOp(id); setKMsg(null); }}>{label}</button>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 6 }}>
+            <input
+              type="number" min="0.1" step="0.1" value={kVal} style={{ width: 84 }}
+              onChange={(e) => setKVal(parseFloat(e.target.value) || 0)}
+            />
+            <span className="muted small">
+              {kOp === 'shell' ? 'wall thickness (mm)' : kOp === 'chamfer' ? 'distance (mm)' : 'radius (mm)'}
+            </span>
+            <button
+              className="btn primary" disabled={kBusy}
+              onClick={() => {
+                // Parametric: Apply ADDS a feature to the body's history and the
+                // geometry regenerates. The primitive stays editable underneath.
+                // (The old path replaced the body with a baked solid — one-way.)
+                const edgeIndices = pickedCount > 0 && kOp !== 'shell' ? [...edgePick.indices] : null;
+                const feat = kOp === 'shell'
+                  ? newFeature('shell', { thickness_mm: kVal, openFace: 0 })
+                  : kOp === 'chamfer'
+                    ? newFeature('chamfer', { distance_mm: kVal, edgeIndices })
+                    : newFeature('fillet', { radius_mm: kVal, edgeIndices });
+                useStore.getState().addFeature(mesh.id, feat);
+                clearEdgePick();
+                scheduleRegenerate(mesh.id, 0);
+                setKMsg({ kind: 'ok', text: `${kOp} added as a feature${edgeIndices ? ` on ${edgeIndices.length} edge${edgeIndices.length === 1 ? '' : 's'}` : ''} — edit it below any time.` });
+              }}
+            >Apply</button>
+          </div>
+          {kMsg && (
+            <p className={kMsg.kind === 'err' ? 'status error small' : kMsg.kind === 'ok' ? 'status ok small' : 'muted small'}>
+              {kMsg.text}
+            </p>
+          )}
+          {kOp !== 'shell' && (
+            <div className="row" style={{ marginTop: 6 }}>
+              <button
+                className={'btn' + (pickingThis ? ' primary' : '')}
+                onClick={() => (pickingThis ? clearEdgePick() : setEdgePickActive(true))}
+                title="Click edges in the 3D view to choose which ones to fillet or chamfer"
+              >{pickingThis ? `◈ Picking edges — ${pickedCount} selected` : '◈ Pick edges'}</button>
+              {pickingThis && <span className="muted small">{pickedCount === 0 ? 'none picked → applies to ALL edges' : 'click more, or Apply'}</span>}
+            </div>
+          )}
+          <div className="row" style={{ marginTop: 6 }}>
+            <button className="btn ghost" disabled={kBusy} onClick={async () => {
+              setKBusy(true);
+              const n = await edgeCount(mesh);
+              setKEdges(n); setKBusy(false);
+            }}>Count edges</button>
+            <button className="btn ghost" disabled={kBusy} onClick={async () => {
+              setKBusy(true); setKMsg({ kind: 'info', text: 'Exporting STEP…' });
+              const r = await meshToSTEP(mesh);
+              if (r.ok) {
+                await window.forge.saveFile({ defaultName: (mesh.label || 'body').replace(/[^\w.-]+/g, '_') + '.step', content: r.text, filters: [{ name: 'STEP', extensions: ['step', 'stp'] }] });
+                setKMsg({ kind: 'ok', text: `STEP exported — ${r.bytes.toLocaleString()} bytes` });
+              } else setKMsg({ kind: 'err', text: r.reason });
+              setKBusy(false);
+            }}>Export STEP</button>
+          </div>
+          {kEdges != null && <p className="muted small">{kEdges} addressable edges on this solid.</p>}
+          <FeatureTimeline mesh={mesh} />
+        </>
       )}
 
       <div className="divider" />

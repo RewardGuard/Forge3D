@@ -206,6 +206,7 @@ export default function App() {
       setCodeProvider(c.codeProvider || 'mock');
       setCircuitProvider(c.circuitProvider || c.codeProvider || 'mock');
       setOrchestraDirector(c.orchestraDirector || 'base');
+        useStore.getState().setLocalAi({ aiMode: c.aiMode || 'cloud', localAiUrl: c.localAiUrl || 'http://localhost:1234/v1', localAiModel: c.localAiModel || '' });
       setOrchestraVision(c.orchestraVision || 'hf-glm45v');
       setOrchestraHeadroom(c.orchestraHeadroom || 'balanced');
       setBridgeEnabled(Boolean(c.bridgeEnabled), Boolean(c.bridgeRunning));

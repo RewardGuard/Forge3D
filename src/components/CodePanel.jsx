@@ -18,7 +18,7 @@ const AGENTS = [
 
 // Build a human-readable wiring + pinout description for a given MCU node, so
 // the agent generates code that matches the actual connections AND real pins.
-function buildContext(node, nodes, wires) {
+export function buildContext(node, nodes, wires) {
   const part = PART_BY_ID[node.partId];
   const lines = [`Board: ${part.name} (id ${node.id}).`, part.desc || ''];
   if (part.pins?.length) lines.push(`Available pins: ${part.pins.join(', ')}.`);
@@ -342,6 +342,9 @@ export default function CodePanel() {
 
       {/* ---- code generation (needs an MCU / SBC) ---- */}
       <h3>{lang.name} Code{isLinuxSBC && <span className="badge">Raspberry Pi OS</span>}</h3>
+      <button className="btn primary full" onClick={() => useStore.getState().setTab('code')} title="A real editor, the whole window, with the pin map and screen beside it">
+        ⤢ Open the full-screen code editor
+      </button>
       {mcus.length === 0 ? (
         <p className="muted small">Add a microcontroller (Arduino, ESP32, Pico…) or a Raspberry Pi 5 to write code for it.</p>
       ) : (

@@ -17,6 +17,17 @@
 // Run: node scripts/benchmark-full.mjs   (wired into `npm test`)
 // ============================================================================
 import assert from 'node:assert/strict';
+import * as U from '../src/lib/units.js';
+import * as ER from '../src/lib/engineeringReport.js';
+import * as AP from '../src/lib/aiProvenance.js';
+import * as MC from '../src/lib/modelContext.js';
+import * as CI from '../src/lib/cadIntent.js';
+import * as RD from '../src/lib/rounding.js';
+import * as SS from '../src/lib/screenSim.js';
+import * as THREE from 'three';
+import * as CP from '../src/lib/copilot.js';
+import { availableModels, modelRoute } from '../src/lib/orchestra.js';
+import * as K from '../src/lib/constraints.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -25,7 +36,7 @@ import { parseAgentJson } from '../src/lib/agentJson.js';
 import { buildNetlist, partsCatalog } from '../src/lib/netlist.js';
 import { numberedNodeNames } from '../src/lib/labels.js';
 import { scaleArr, packScale, avgScale } from '../src/lib/scaleUtil.js';
-import { MATERIALS, MATERIAL_KEYS, partMaterialKey, partMaterial } from '../src/lib/materials.js';
+import { MATERIALS, MATERIAL_KEYS, partMaterialKey, partMaterial, hasStructuralData, strengthLimit } from '../src/lib/materials.js';
 import {
   AMBIENT_C, HAZARD_LIST, resolveMaterial, estimateGeom,
   initLifeState, stepLifeState, glowColor, tempColor, statusLabel,
@@ -57,16 +68,23 @@ const failures = [];
 const timings = [];
 const C = { g: '\x1b[32m', r: '\x1b[31m', d: '\x1b[2m', b: '\x1b[1m', x: '\x1b[0m' };
 
-function check(name, fn) {
+// Every check runs SEQUENTIALLY and async ones are awaited. The previous
+// harness called fn() and moved on, so an async test yielded, later sync
+// tests mutated the shared store underneath it, and its failure surfaced as
+// an unhandled rejection AFTER the summary had already printed "0 failed".
+const queue = [];
+function check(name, fn) { queue.push({ kind: 'check', name, fn }); }
+async function runCheck({ name, fn }) {
   try {
-    fn();
+    await fn();
     pass++; console.log(`  ${C.g}✓${C.x} ${name}`);
   } catch (e) {
     fail++; failures.push({ name, err: String(e?.message || e).split('\n')[0] });
     console.log(`  ${C.r}✗${C.x} ${name} — ${String(e?.message || e).split('\n')[0]}`);
   }
 }
-function bench(name, iters, budgetMs, fn) {
+function bench(name, iters, budgetMs, fn) { queue.push({ kind: 'bench', name, iters, budgetMs, fn }); }
+function runBench({ name, iters, budgetMs, fn }) {
   const t0 = process.hrtime.bigint();
   for (let i = 0; i < iters; i++) fn(i);
   const per = Number(process.hrtime.bigint() - t0) / 1e6 / iters;
@@ -74,7 +92,7 @@ function bench(name, iters, budgetMs, fn) {
   if (per <= budgetMs) { pass++; console.log(`  ${C.g}✓${C.x} ${name} ${C.d}${per.toFixed(3)}ms/op × ${iters} (budget ${budgetMs}ms)${C.x}`); }
   else { fail++; failures.push({ name, err: `too slow: ${per.toFixed(3)}ms/op > ${budgetMs}ms` }); console.log(`  ${C.r}✗${C.x} ${name} ${C.r}${per.toFixed(3)}ms/op > ${budgetMs}ms budget${C.x}`); }
 }
-const section = (t) => console.log(`\n${C.b}${t}${C.x}`);
+const section = (t) => queue.push({ kind: 'section', t });
 // values an LLM or a corrupt project file realistically produces
 const HOSTILE = [undefined, null, '', 0, -1, NaN, Infinity, -Infinity, {}, [], 'null', '[]', true,
   '../../etc/passwd', '<script>alert(1)</script>', ' ', 'x'.repeat(10000)];
@@ -626,6 +644,906 @@ bench('validateStructure() 300 objects', 5, 400, () => {
 });
 
 // ---------------------------------------------------------------------------
+section('12. UNITS — no artificial size cap, honest precision');
+
+check('parses mm, inches, feet-inches and fractions', () => {
+  assert.equal(U.parse('12.5'), 12.5);
+  assert.ok(Math.abs(U.parse('1.5in') - 38.1) < 1e-9);
+  assert.ok(Math.abs(U.parse("3'6\"") - 1066.8) < 1e-9);
+  assert.ok(Math.abs(U.parse('1/2 in') - 12.7) < 1e-9);
+  assert.ok(Math.abs(U.parse('1-1/2in') - 38.1) < 1e-9);
+  assert.ok(Math.abs(U.parse('5 thou') - 0.127) < 1e-9);
+});
+
+check('unit conversion round-trips without drift', () => {
+  for (const u of ['mm', 'cm', 'm', 'in', 'ft', 'thou', 'um']) {
+    const back = U.fromMm(U.toMm(123.456, u), u);
+    assert.ok(Math.abs(back - 123.456) < 1e-9, u);
+  }
+});
+
+check('garbage input returns NaN, never throws', () => {
+  for (const bad of ['', 'abc', null, undefined, {}, 'furlongs', '1/0 in', '--5']) {
+    const r = U.parse(bad);
+    assert.ok(Number.isNaN(r) || Number.isFinite(r), String(bad));
+  }
+});
+
+check('REGRESSION GUARD: dimensions above 400 mm are no longer clamped', () => {
+  // orchestraSpec used to clamp every dimension to 400 mm, silently turning a
+  // 1.8 m beam into a 400 mm stub. If this fails, that cap came back.
+  const spec = { intent: 'gantry', bodies: [{ id: 'beam', shape: 'box', dims_mm: { w: 1800, h: 120, d: 120 }, pos_mm: [0, 600, 0] }] };
+  const out = normalizeSpec(spec);
+  assert.equal(out.bodies[0].dims_mm.w, 1800, '1800 mm beam must survive normalization');
+  assert.equal(out.bodies[0].pos_mm[1], 600, '600 mm position must survive normalization');
+  assert.ok(!out.normalizationIssues, 'a valid large body must raise no issues');
+});
+
+check('industrial and micro scales both validate', () => {
+  assert.ok(U.validateDimension(12000).ok, '12 m');
+  assert.ok(U.validateDimension(0.05).ok, '50 µm');
+  assert.ok(!U.validateDimension(0).ok, 'zero must fail');
+  assert.ok(!U.validateDimension(NaN).ok, 'NaN must fail');
+  assert.ok(!U.validateDimension(1e12).ok, 'beyond float64 sub-µm must fail');
+});
+
+check('viewport profile adapts across 4 orders of magnitude', () => {
+  let lastGrid = 0;
+  for (const e of [2, 150, 1200, 12000]) {
+    const p = U.viewportProfile(e);
+    assert.ok(p.gridStepMm > lastGrid, 'grid must grow with the scene');
+    assert.ok(p.farMm / p.nearMm <= 1e6, 'depth range must stay within what a depth buffer can hold');
+    assert.ok(p.snapMm > 0 && Number.isFinite(p.snapMm));
+    lastGrid = p.gridStepMm;
+  }
+});
+
+// ---------------------------------------------------------------------------
+section('13. ENGINEERING READINESS — simulation is not manufacturing');
+
+check('a passing simulation alone NEVER yields manufacturing ready', () => {
+  const r = ER.evaluateReadiness({ spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] }, simulation: { ran: true, ok: true } });
+  assert.equal(r.manufacturingReady, false, 'this is the whole point of the ladder');
+  assert.ok(r.blockers.length >= 3, 'must list every unrun stage');
+});
+
+check('the ladder cannot skip a failed stage', () => {
+  const r = ER.evaluateReadiness({
+    spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] },
+    geometry: { ok: false, issues: ['bodies overlap'] },
+    simulation: { ran: true, ok: true },
+    structure: { ok: true, issues: [] },
+    manufacture: { printable: true, issues: [] },
+  });
+  assert.equal(r.manufacturingReady, false);
+  assert.equal(r.reachedStage, ER.STAGE.DESIGNED, 'must stop at the failed rung');
+});
+
+check('a full pass is PARTIAL, never an unqualified certification', () => {
+  const r = ER.evaluateReadiness({
+    spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] },
+    geometry: { ok: true, issues: [] }, simulation: { ran: true, ok: true },
+    structure: { ok: true, massG: 42, issues: [] }, manufacture: { printable: true, issues: [] },
+  });
+  assert.equal(r.manufacturingReady, true);
+  const last = r.stages.at(-1);
+  assert.equal(last.status, ER.STATUS.PARTIAL, 'never PASS — we cannot certify');
+  assert.ok(last.reasons.some((x) => /NOT a certification/i.test(x)));
+  assert.ok(last.reasons.some((x) => /qualified engineer/i.test(x)));
+});
+
+check('the Verified stage admits it has no FEA', () => {
+  const r = ER.evaluateReadiness({
+    spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] },
+    geometry: { ok: true, issues: [] }, simulation: { ran: true, ok: true },
+    structure: { ok: true, massG: 42, issues: [] },
+  });
+  const v = r.stages.find((x) => x.stage === ER.STAGE.VERIFIED);
+  assert.equal(v.status, ER.STATUS.PARTIAL);
+  assert.ok(v.reasons.some((x) => /no FEA solver/i.test(x)), 'must say stress was not evaluated');
+});
+
+check('the simulation stage is labelled visual, not engineering', () => {
+  const r = ER.evaluateReadiness({ spec: { bodies: [{ id: 'a', dims_mm: { w: 1, h: 1, d: 1 } }] }, simulation: { ran: true, ok: true } });
+  const sim = r.stages.find((x) => x.stage === ER.STAGE.SIMULATED);
+  assert.ok(sim.limitations.some((l) => /VISUAL PHYSICS/i.test(l)));
+});
+
+check('unsupported analyses explain themselves instead of returning a number', () => {
+  const un = ER.unsupportedCapabilities();
+  assert.ok(un.length >= 8, 'we are honest about a lot');
+  for (const c of un) {
+    assert.ok(c.reason && c.reason.length > 30, `${c.id} needs a real reason`);
+    assert.ok(c.wouldNeed, `${c.id} must say what it would take`);
+  }
+  assert.ok(un.some((c) => c.id === 'stress'));
+  assert.ok(un.some((c) => c.id === 'safety_factor'));
+});
+
+check('every process reports the rules it could not evaluate', () => {
+  for (const p of ER.processIds()) {
+    const r = ER.evaluateReadiness({
+      spec: { bodies: [{ id: 'a', dims_mm: { w: 50, h: 20, d: 30 } }] },
+      geometry: { ok: true, issues: [] }, simulation: { ran: true, ok: true },
+      structure: { ok: true, issues: [] }, manufacture: { printable: true, issues: [] },
+      process: p,
+    });
+    const ma = r.stages.find((x) => x.stage === ER.STAGE.MANUFACTURING_ANALYSIS);
+    const skipped = ma.data.skipped || [];
+    for (const sk of skipped) {
+      assert.ok(ma.reasons.some((x) => x.includes(sk.id.replace(/_/g, ' '))), `${p}: must disclose skipped ${sk.id}`);
+    }
+  }
+});
+
+check('evaluateReadiness never throws on empty or hostile input', () => {
+  for (const arg of [undefined, {}, { spec: null }, { spec: { bodies: [] } }, { spec: {}, process: 'nonsense' }]) {
+    const r = ER.evaluateReadiness(arg);
+    assert.ok(r && Array.isArray(r.stages) && r.stages.length === 6);
+    assert.equal(typeof r.manufacturingReady, 'boolean');
+  }
+});
+
+// ---------------------------------------------------------------------------
+section('14. MATERIALS — real properties, honest caveats');
+
+check('every material carries full structural data', () => {
+  for (const k of MATERIAL_KEYS) assert.ok(hasStructuralData(k), `${k} missing structural properties`);
+});
+
+check('brittle materials report an ultimate basis, ductile ones yield', () => {
+  assert.equal(strengthLimit('aluminum').basis, 'yield');
+  assert.ok(/ultimate/.test(strengthLimit('resin').basis), 'resin has no yield point');
+  assert.ok(/ultimate/.test(strengthLimit('silicon').basis));
+});
+
+check('material assessment always states provenance and what it cannot do', () => {
+  for (const k of MATERIAL_KEYS) {
+    const a = ER.materialAssessment(k);
+    assert.ok(a.ok && a.grade, `${k} must name its grade`);
+    assert.ok(a.caveats.some((c) => /Not certified lot data/i.test(c)));
+    assert.ok(a.cannotCompute.some((c) => c.id === 'stress'));
+  }
+  assert.equal(ER.materialAssessment('unobtainium').ok, false);
+});
+
+check('printed plastics disclose layer anisotropy', () => {
+  for (const k of ['pla', 'abs', 'petg', 'nylon']) {
+    assert.ok(ER.materialAssessment(k).caveats.some((c) => /anisotropic/i.test(c)), k);
+  }
+});
+
+// ---------------------------------------------------------------------------
+section('15. AI PROVENANCE — a synthesizer may never wear the AI badge');
+
+check('classifies every provider failure mode', () => {
+  const cases = [
+    [{ status: 429, message: 'Rate limit reached' }, 'rate_limit'],
+    [{ status: 429, message: 'You exceeded your current quota, check billing' }, 'no_credits'],
+    [{ status: 402, message: 'Insufficient credits' }, 'no_credits'],
+    [{ status: 401, message: 'Invalid API key' }, 'auth'],
+    [{ status: 403, message: 'Forbidden' }, 'auth'],
+    [{ message: 'fetch failed' }, 'network'],
+    [{ status: 503, message: 'Overloaded' }, 'server_error'],
+    [{ message: 'No API key configured' }, 'no_key'],
+    [{ status: 404, message: 'model x not found' }, 'model_unavailable'],
+  ];
+  for (const [err, want] of cases) assert.equal(AP.classifyAiError(err).id, want, JSON.stringify(err));
+});
+
+check('classifier never throws and always names an action', () => {
+  for (const bad of [null, undefined, '', 0, {}, [], 'weird', new Error('boom')]) {
+    const r = AP.classifyAiError(bad);
+    assert.ok(r.id && r.title && r.explain);
+    assert.ok(Array.isArray(r.actions) && r.actions.length > 0, 'user must always have an option');
+  }
+});
+
+check('deterministic results are never reported as AI', () => {
+  const p = AP.makeProvenance('deterministic', { reason: AP.AI_UNAVAILABLE.no_credits, model: 'anthropic' });
+  assert.equal(p.usedAi, false);
+  assert.equal(p.model, null, 'a non-AI result must not carry a model name');
+  assert.ok(AP.shouldWarnNoAi(p));
+  assert.ok(/AI unavailable/.test(AP.provenanceSummary(p)));
+});
+
+check('preset results are labelled as presets', () => {
+  const p = AP.makeProvenance('preset');
+  assert.equal(p.usedAi, false);
+  assert.ok(/preset/i.test(p.label));
+  assert.ok(/No AI reasoning/i.test(p.detail));
+});
+
+check('only genuine AI runs carry the model and clear the warning', () => {
+  const p = AP.makeProvenance('ai', { model: 'anthropic' });
+  assert.equal(p.usedAi, true);
+  assert.equal(p.model, 'anthropic');
+  assert.equal(AP.shouldWarnNoAi(p), false);
+});
+
+check('every unavailability reason offers a way forward', () => {
+  for (const [id, r] of Object.entries(AP.AI_UNAVAILABLE)) {
+    assert.ok(r.actions.length >= 2, `${id} needs alternatives`);
+    assert.ok(r.actions.some((a) => /deterministic|manual|local/i.test(a)), `${id} must offer a non-AI path`);
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+section('16. ENGINEERING COPILOT — Orchestra changes the model, validated');
+
+const copilotScene = () => {
+  useStore.setState({ meshes: [
+    { id: 'm1', kind: 'box', label: 'enclosure shell', position: [0, 0.2, 0], scale: [1.4, 0.4, 0.9], material: 'steel' },
+    { id: 'm2', kind: 'cylinder', label: 'mounting boss A', position: [0.5, 0.3, 0.3], scale: 0.12, material: 'steel' },
+    { id: 'm3', kind: 'cylinder', label: 'mounting boss B', position: [-0.5, 0.3, 0.3], scale: 0.12, material: 'steel' },
+  ] });
+};
+
+check('model context reports real mass from density x volume', () => {
+  copilotScene();
+  const ctx = MC.buildModelContext();
+  assert.equal(ctx.bodyCount, 3);
+  assert.ok(ctx.massProperties.totalMass_g > 0);
+  // Steel is 7.85 g/cm3 — mass must equal density x volume, no fudge exponent.
+  const b = ctx.bodies.find((x) => x.id === 'm1');
+  assert.ok(Math.abs(b.mass_g - b.volume_cm3 * 7.85) < 0.01, 'mass must be density x volume exactly');
+});
+
+check('inferred feature roles are labelled as low-confidence guesses', () => {
+  copilotScene();
+  const ctx = MC.buildModelContext();
+  const boss = ctx.bodies.find((b) => b.id === 'm2');
+  assert.equal(boss.role, 'mounting');
+  assert.equal(boss.roleConfidence, 'low', 'a label heuristic must never claim high confidence');
+  assert.ok(/heuristic/i.test(boss.roleBasis));
+});
+
+check('context always discloses that bodies are primitives, not B-rep', () => {
+  copilotScene();
+  const ctx = MC.buildModelContext();
+  assert.ok(ctx.limitations.some((l) => /B-rep|topology/i.test(l)));
+  assert.ok(ctx.simulation.caveat && /not an engineering simulation/i.test(ctx.simulation.caveat));
+});
+
+check('lighten preserves protected bodies and predicts a real mass', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  assert.ok(p.ok, p.reason);
+  assert.ok(p.preserved.includes('m2') && p.preserved.includes('m3'), 'mounting bosses must be protected by default');
+  assert.ok(!p.changes.some((c) => c.bodyId === 'm2' || c.bodyId === 'm3'), 'protected bodies must not appear in the diff');
+  assert.ok(p.predicted.massAfter_g < p.predicted.massBefore_g);
+});
+
+check('a material swap that overshoots the target says so', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  if (p.strategy === 'material') {
+    const achieved = Math.abs(p.predicted.deltaPct);
+    if (achieved - 20 > 2) {
+      assert.ok(p.explanation.bullets.some((b) => /overshoot/i.test(b)), 'must disclose the overshoot');
+    }
+  }
+});
+
+check('apply MEASURES the result rather than echoing the prediction', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  const r = CI.applyProposal(p);
+  assert.ok(r.applied);
+  const fresh = MC.buildModelContext().massProperties.totalMass_g;
+  assert.ok(Math.abs(r.measured.massAfter_g - fresh) < 1e-6, 'measured mass must come from a fresh reading');
+  assert.ok(Math.abs(r.predictionError_pct) < 1, 'prediction must track measurement');
+  CI.revertProposal(r.revertToken);
+});
+
+check('every applied change invalidates the downstream analysis stages', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  const r = CI.applyProposal(p);
+  assert.ok(r.invalidates.includes('manufacturing_ready'), 'changing geometry must un-ready the design');
+  assert.ok(r.invalidates.includes('verified'));
+  CI.revertProposal(r.revertToken);
+});
+
+check('revert restores the exact original mass', () => {
+  copilotScene();
+  const before = MC.buildModelContext().massProperties.totalMass_g;
+  const p = CI.planOperation('lighten', { targetPct: 20 });
+  const r = CI.applyProposal(p);
+  assert.ok(MC.buildModelContext().massProperties.totalMass_g !== before, 'change must actually apply');
+  const rv = CI.revertProposal(r.revertToken);
+  assert.ok(rv.reverted);
+  assert.ok(Math.abs(rv.massNow_g - before) < 1e-6, 'revert must be exact');
+});
+
+check('scaling that would strand a protected body is REFUSED with a safe maximum', () => {
+  copilotScene();
+  const p = CI.planOperation('lighten', { targetPct: 95, strategy: 'scale' });
+  assert.equal(p.ok, false, 'shrinking the shell past its bosses must not be allowed');
+  assert.ok(/outside the shrunken geometry/i.test(p.reason));
+  assert.ok(p.alternatives.some((a) => /Target at most/i.test(a)), 'must offer the achievable number');
+});
+
+check('fillet is refused honestly, never faked', () => {
+  copilotScene();
+  const p = CI.planOperation('fillet_edges', { radius_mm: 2 });
+  assert.equal(p.ok, false);
+  assert.equal(p.refused, true);
+  assert.ok(/B-rep/i.test(p.reason), 'must name the missing kernel');
+  assert.ok(p.wouldNeed);
+  assert.ok(/will not apply a cosmetic shader round/i.test(p.note));
+});
+
+check('load-case optimisation is refused, and points at real alternatives', () => {
+  copilotScene();
+  const p = CI.planOperation('optimize_under_load', { load_N: 500 });
+  assert.equal(p.ok, false);
+  assert.ok(/no FEA solver/i.test(p.reason));
+  assert.ok(p.alternatives.length >= 2);
+  assert.ok(p.reason.includes('500 N'), 'must reflect the actual load asked about');
+});
+
+check('unknown operations and hostile args never throw', () => {
+  copilotScene();
+  for (const [op, args] of [['nope', {}], ['lighten', {}], ['lighten', { targetPct: -5 }], ['lighten', { targetPct: 'x' }],
+                            ['lighten', { targetPct: 150 }], ['set_material', { material: 'unobtainium', bodyIds: ['m1'] }],
+                            ['set_material', { bodyIds: [], material: 'pla' }]]) {
+    const p = CI.planOperation(op, args);
+    assert.equal(typeof p.ok, 'boolean');
+    if (!p.ok) assert.ok(p.reason && p.reason.length > 5, `${op} needs a real reason`);
+  }
+});
+
+check('applying a refusal is rejected', () => {
+  const p = CI.planOperation('fillet_edges', { radius_mm: 2 });
+  const r = CI.applyProposal(p);
+  assert.equal(r.applied, false);
+});
+
+check('every proposal carries an inspectable explanation', () => {
+  copilotScene();
+  for (const [op, args] of [['lighten', { targetPct: 15 }], ['set_material', { bodyIds: ['m1'], material: 'pla' }]]) {
+    const p = CI.planOperation(op, args);
+    if (!p.ok) continue;
+    assert.ok(p.explanation.headline, `${op} needs a headline`);
+    assert.ok(p.explanation.bullets.length >= 2, `${op} needs bullets`);
+    assert.ok(p.explanation.reason, `${op} needs a reason`);
+    assert.ok(p.explanation.caveats.length >= 1, `${op} must state caveats`);
+    assert.equal(p.reversible, true);
+  }
+  resetScene();
+});
+
+// ---------------------------------------------------------------------------
+section('17. CORNER GEOMETRY — real rounds, honest limits');
+
+check('true dimensions account for non-uniform scale', () => {
+  const d = RD.trueDimsMm({ kind: 'box', scale: [1.4, 0.4, 0.9] });
+  assert.equal(d.length, 3);
+  assert.ok(d[0] > d[2] && d[2] > d[1], 'must reflect the stretch, not the unit cube');
+});
+
+check('max radius is half the smallest dimension', () => {
+  const mesh = { kind: 'box', scale: [1.4, 0.4, 0.9] };
+  const dims = RD.trueDimsMm(mesh);
+  assert.ok(Math.abs(RD.maxCornerRadiusMm(mesh) - Math.min(...dims) / 2) < 1e-9);
+});
+
+check('an impossible radius is refused WITH the numbers', () => {
+  const mesh = { kind: 'box', scale: [1.4, 0.4, 0.9] };
+  const v = RD.validateCornerRadius(mesh, 50);
+  assert.equal(v.ok, false);
+  assert.ok(/exceeds the available local geometry/i.test(v.reason), 'must use the spec wording');
+  assert.ok(/116\.7|33\.3|75\.0/.test(v.reason), 'must quote the real dimensions');
+  assert.ok(Number.isFinite(v.maxRadiusMm), 'must say what WOULD fit');
+});
+
+check('a legal radius passes and zero means sharp', () => {
+  const mesh = { kind: 'box', scale: [1.4, 0.4, 0.9] };
+  assert.ok(RD.validateCornerRadius(mesh, 3).ok);
+  const z = RD.validateCornerRadius(mesh, 0);
+  assert.ok(z.ok && /sharp/i.test(z.note));
+});
+
+check('non-roundable primitives are refused by name', () => {
+  for (const k of ['sphere', 'torus', 'icosahedron']) {
+    const v = RD.validateCornerRadius({ kind: k, scale: 1 }, 2);
+    assert.equal(v.ok, false, k);
+    assert.ok(v.reason.includes(k));
+  }
+});
+
+check('rounded and chamfered boxes are genuinely different solids', () => {
+  const base = { kind: 'box', scale: [1.4, 0.4, 0.9], cornerRadius_mm: 3 };
+  const round = RD.roundedBoxGeometry({ ...base, cornerStyle: 'round' });
+  const cham = RD.roundedBoxGeometry({ ...base, cornerStyle: 'chamfer' });
+  assert.ok(round.attributes.position.count > cham.attributes.position.count * 2,
+    'a chamfer is one facet per edge; a round is many');
+  assert.ok(cham.attributes.position.count > 0);
+});
+
+check('a rounded cylinder is a real surface of revolution', () => {
+  const g = RD.roundedCylinderGeometry({ kind: 'cylinder', scale: 1, cornerRadius_mm: 2 });
+  assert.ok(g.attributes.position.count > 100);
+  const plain = RD.roundedCylinderGeometry({ kind: 'cylinder', scale: 1, cornerRadius_mm: 0 });
+  assert.ok(plain.attributes.position.count !== g.attributes.position.count, 'rounding must change the mesh');
+});
+
+check('geometry is built at TRUE size so the radius stays circular', () => {
+  // The whole point: a unit cube rounded then stretched would give an ellipse.
+  const stretched = RD.roundedBoxGeometry({ kind: 'box', scale: [4, 0.5, 0.5], cornerRadius_mm: 1, cornerStyle: 'round' });
+  stretched.computeBoundingBox();
+  const bb = stretched.boundingBox;
+  const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y;
+  assert.ok(w / h > 6, 'the geometry itself must carry the stretch');
+  assert.equal(RD.hasBakedScale({ kind: 'box', cornerRadius_mm: 1 }), true);
+  assert.equal(RD.hasBakedScale({ kind: 'box', cornerRadius_mm: 0 }), false, 'unrounded meshes keep normal scaling');
+});
+
+check('rounding never throws on hostile input', () => {
+  for (const m of [{}, { kind: 'box' }, { kind: 'box', scale: NaN }, { kind: 'box', scale: [0, 0, 0] },
+                   { kind: 'box', scale: 1, cornerRadius_mm: -5 }, { kind: 'cylinder', scale: [1, 1, 1], cornerRadius_mm: 1e9 }]) {
+    const v = RD.validateCornerRadius(m, m.cornerRadius_mm ?? 1);
+    assert.equal(typeof v.ok, 'boolean');
+    if (RD.isRoundable(m.kind) && Number(m.cornerRadius_mm) > 0) {
+      const g = m.kind === 'cylinder' ? RD.roundedCylinderGeometry(m) : RD.roundedBoxGeometry(m);
+      assert.ok(g.attributes.position.count > 0, 'must still produce geometry');
+    }
+  }
+});
+
+check('round_corners operation applies and reverts', () => {
+  useStore.setState({ meshes: [
+    { id: 'r1', kind: 'box', label: 'shell', position: [0, 0.2, 0], scale: [1.4, 0.4, 0.9], material: 'abs' },
+  ] });
+  const p = CI.planOperation('round_corners', { radius_mm: 3, preserve: [] });
+  assert.ok(p.ok, p.reason);
+  const r = CI.applyProposal(p);
+  assert.ok(r.applied);
+  assert.equal(useStore.getState().meshes[0].cornerRadius_mm, 3);
+  CI.revertProposal(r.revertToken);
+  assert.ok(!useStore.getState().meshes[0].cornerRadius_mm);
+  resetScene();
+});
+
+check('an over-large radius is refused with the achievable number', () => {
+  useStore.setState({ meshes: [
+    { id: 'r1', kind: 'box', label: 'shell', position: [0, 0.2, 0], scale: [1.4, 0.4, 0.9], material: 'abs' },
+  ] });
+  const p = CI.planOperation('round_corners', { radius_mm: 500, preserve: [] });
+  assert.equal(p.ok, false);
+  assert.ok(p.alternatives.some((a) => /Try [\d.]+ mm/.test(a)), 'must offer the largest that fits');
+  resetScene();
+});
+
+check('edge-selection fillet is still refused, and points at round_corners', () => {
+  const p = CI.planOperation('fillet_edges', { radius_mm: 2 });
+  assert.equal(p.ok, false);
+  assert.ok(/B-rep/.test(p.reason));
+  assert.ok(p.alternatives.some((a) => /round_corners/.test(a)), 'must name the thing that DOES work');
+});
+
+// ---------------------------------------------------------------------------
+section('18. DISPLAY SIMULATION — screens show what the firmware draws');
+
+const OLED = `
+  #include <Adafruit_SSD1306.h>
+  int temp = 23; int pct = 70;
+  void setup(){ display.begin(SSD1306_SWITCHCAPVCC, 0x3C); }
+  void loop(){
+    display.clearDisplay();
+    display.setTextSize(2); display.setCursor(0,0);
+    display.print("Temp: "); display.print(temp); display.println("C");
+    display.drawRect(0, 40, 128, 20, WHITE);
+    display.fillRect(2, 42, map(temp,0,50,0,124), 16, WHITE);
+    display.display();
+  }`;
+
+check('an OLED sketch renders real lit pixels', () => {
+  const r = SS.renderScreen('oled-ssd1306', OLED, {});
+  assert.ok(r.ok);
+  assert.equal(r.fb.w, 128); assert.equal(r.fb.h, 64);
+  assert.ok(r.fb.litCount() > 500, `only ${r.fb.litCount()} lit`);
+  assert.ok(r.calls >= 8);
+});
+
+check('variables resolve from the firmware\'s own declarations', () => {
+  const r = SS.renderScreen('oled-ssd1306', OLED, SS.extractDeclaredValues(OLED));
+  const bar = SS.renderScreen('oled-ssd1306', OLED, { temp: 0 });
+  assert.ok(r.fb.litCount() > bar.fb.litCount(), 'temp=23 must draw a longer bar than temp=0');
+});
+
+check('map() and arithmetic are evaluated, never eval\'d unsafely', () => {
+  const code = 'void loop(){ display.fillRect(0,0, map(x,0,100,0,128), 8, 1); }';
+  const a = SS.renderScreen('oled-ssd1306', code, { x: 50 });
+  const b = SS.renderScreen('oled-ssd1306', code, { x: 100 });
+  assert.ok(b.fb.litCount() > a.fb.litCount() * 1.8, 'x=100 must fill ~2× x=50');
+  // an injection attempt is NOT executed
+  const evil = 'void loop(){ display.fillRect(0,0, (globalThis.pwned=1,128), 8, 1); }';
+  SS.renderScreen('oled-ssd1306', evil, {});
+  assert.equal(globalThis.pwned, undefined, 'expression evaluator must not run arbitrary code');
+});
+
+check('an unresolvable variable renders as [name], not a guess', () => {
+  const r = SS.renderScreen('lcd1602', 'void loop(){ lcd.setCursor(0,0); lcd.print(humidity); }', {});
+  assert.ok(r.text[0].startsWith('[humidity]'), r.text[0]);
+});
+
+check('a character LCD lays text in cells', () => {
+  const r = SS.renderScreen('lcd1602', 'void setup(){ lcd.begin(16,2); lcd.print("Hello"); lcd.setCursor(0,1); lcd.print("World"); }', {});
+  assert.equal(r.text[0].trim(), 'Hello');
+  assert.equal(r.text[1].trim(), 'World');
+  assert.equal(r.text[0].length, 16, 'row must be exactly 16 cells');
+});
+
+check('text past the LCD edge is clipped, not wrapped', () => {
+  const r = SS.renderScreen('lcd1602', 'void loop(){ lcd.print("THIS IS FAR TOO LONG FOR 16"); }', {});
+  assert.equal(r.text[0], 'THIS IS FAR TOO ');
+  assert.equal(r.text[1].trim(), '', 'overflow must not spill to row 2');
+});
+
+check('a 7-segment shows the number it was given', () => {
+  const r = SS.renderScreen('seven-seg', 'void loop(){ display.showNumberDec(rpm); }', { rpm: 1450 });
+  assert.equal(r.text[0].trim(), '1450');
+});
+
+check('RGB565 and named colours parse on a colour TFT', () => {
+  const r = SS.renderScreen('tft-28-spi', 'void loop(){ tft.fillScreen(ILI9341_BLACK); tft.fillRect(0,0,10,10,0xF800); tft.fillRect(20,0,10,10,ILI9341_GREEN); }', {});
+  const [r1] = r.fb.get(5, 5); const [, g2] = r.fb.get(25, 5);
+  assert.ok(r1 > 200, '0xF800 is red');
+  assert.ok(g2 > 200, 'ILI9341_GREEN is green');
+});
+
+check('e-paper renders dark-on-light', () => {
+  const r = SS.renderScreen('eink-29', 'void loop(){ display.setCursor(0,0); display.print("A"); }', {});
+  const bg = r.fb.get(290, 120); assert.ok(bg[0] > 200, 'background must be light');
+});
+
+check('an LED matrix honours setRow bit patterns', () => {
+  const r = SS.renderScreen('max7219', 'void loop(){ lc.setRow(0, 0, 0xFF); lc.setRow(0, 7, 0x81); }', {});
+  assert.equal(r.fb.litCount(), 8 + 2);
+});
+
+check('unsupported calls are reported by name, never silently dropped', () => {
+  const r = SS.renderScreen('oled-ssd1306', 'void loop(){ display.drawBitmap(0,0,logo,64,64,1); display.print("x"); }', {});
+  assert.ok(r.unsupported.includes('drawBitmap'));
+  assert.ok(/Not understood: drawBitmap/.test(r.note));
+});
+
+check('the note always says control flow is not executed', () => {
+  const r = SS.renderScreen('oled-ssd1306', OLED, {});
+  assert.ok(/Control flow is not executed/.test(r.note), 'this is the honesty label');
+});
+
+check('a runaway sketch is truncated, not hung', () => {
+  const code = 'void loop(){' + 'display.print("x");'.repeat(2000) + '}';
+  const t0 = performance.now();
+  const r = SS.renderScreen('oled-ssd1306', code, {});
+  assert.ok(r.truncated);
+  assert.ok(performance.now() - t0 < 500, 'must bail fast');
+});
+
+check('screen sim never throws on hostile input', () => {
+  for (const [id, code, v] of [['oled-ssd1306', null, null], ['oled-ssd1306', '', {}], ['nope', 'x', {}],
+    ['oled-ssd1306', 'display.print(', {}], ['oled-ssd1306', 'display.fillRect(NaN,NaN,NaN,NaN,x);', {}],
+    ['lcd1602', 'lcd.setCursor(999,999); lcd.print("a");', {}], ['tft-28-spi', 'tft.drawLine(-9e9,0,9e9,0,1);', {}]]) {
+    const r = SS.renderScreen(id, code, v);
+    assert.equal(typeof r.ok, 'boolean', id);
+  }
+});
+
+check('upscaled image data keeps square pixels', () => {
+  const r = SS.renderScreen('oled-ssd1306', 'void loop(){ display.drawPixel(3,3,1); }', {});
+  const img = SS.framebufferToImageData(r.fb, 4);
+  assert.equal(img.width, 512); assert.equal(img.height, 256);
+  // the single pixel becomes a 4×4 block, all lit
+  let lit = 0;
+  for (let y = 12; y < 16; y++) for (let x = 12; x < 16; x++) if (img.data[(y * 512 + x) * 4]) lit++;
+  assert.equal(lit, 16);
+});
+
+// ---------------------------------------------------------------------------
+section('19. PROFESSIONAL VIEWPORT — display state never touches the model');
+
+const vpScene = () => {
+  useStore.setState({ meshes: [
+    { id: 'a', kind: 'box', label: 'a', position: [0, 0, 0], scale: 1 },
+    { id: 'b', kind: 'box', label: 'b', position: [1, 0, 0], scale: 1 },
+    { id: 'c', kind: 'box', label: 'c', position: [2, 0, 0], scale: 1 },
+  ], selectedMeshId: 'b', selectedMeshIds: ['b'] });
+  useStore.getState().showAll();
+};
+
+check('hide removes from view but never from the model', () => {
+  vpScene();
+  useStore.getState().hideSelected();
+  const st = useStore.getState();
+  assert.deepEqual(st.viewport.hiddenIds, ['b']);
+  assert.equal(st.meshes.length, 3, 'the body must still exist');
+  assert.equal(st.selectedMeshId, null, 'a hidden body cannot stay selected');
+});
+
+check('isolate keeps only the selection, show-all restores', () => {
+  vpScene();
+  useStore.getState().isolateSelected();
+  assert.deepEqual(useStore.getState().viewport.isolatedIds, ['b']);
+  useStore.getState().showAll();
+  const v = useStore.getState().viewport;
+  assert.equal(v.isolatedIds, null); assert.deepEqual(v.hiddenIds, []);
+});
+
+check('isolate with nothing selected is a no-op, not a blank screen', () => {
+  vpScene();
+  useStore.setState({ selectedMeshId: null, selectedMeshIds: [] });
+  useStore.getState().isolateSelected();
+  assert.equal(useStore.getState().viewport.isolatedIds, null);
+});
+
+check('shading and projection are pure display flags', () => {
+  vpScene();
+  const before = JSON.stringify(useStore.getState().meshes);
+  useStore.getState().setViewport({ shading: 'wireframe', projection: 'orthographic' });
+  assert.equal(JSON.stringify(useStore.getState().meshes), before, 'no mesh may change');
+  useStore.getState().setViewport({ shading: 'shaded', projection: 'perspective' });
+});
+
+check('section plane math keeps the intended half', () => {
+  // mirror of SectionPlane: keep y < offset unless flipped
+  const plane = (axis, offset, flip) => {
+    const v = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[axis];
+    const sign = flip ? 1 : -1;
+    return new THREE.Plane(new THREE.Vector3(...v).multiplyScalar(sign), -sign * offset);
+  };
+  const kept = (p, pt) => p.distanceToPoint(new THREE.Vector3(...pt)) >= 0;  // three clips where < 0
+  const p = plane('y', 2, false);
+  assert.ok(kept(p, [0, 1, 0]), 'below the cut is kept');
+  assert.ok(!kept(p, [0, 3, 0]), 'above the cut is clipped');
+  const f = plane('y', 2, true);
+  assert.ok(!kept(f, [0, 1, 0]) && kept(f, [0, 3, 0]), 'flip reverses it');
+  const px = plane('x', -1, false);
+  assert.ok(kept(px, [-2, 0, 0]) && !kept(px, [0, 0, 0]), 'works on x with a negative offset');
+});
+
+check('bookmarks store and recall a camera, and are replaced by name', () => {
+  vpScene();
+  const st = useStore.getState();
+  st.addBookmark('front-close', [0, 0, 2], [0, 0, 0]);
+  st.addBookmark('front-close', [0, 0, 3], [0, 0, 0]);   // same name → replace
+  assert.equal(useStore.getState().viewport.bookmarks.length, 1);
+  assert.deepEqual(useStore.getState().viewport.bookmarks[0].position, [0, 0, 3]);
+  useStore.getState().recallBookmark('front-close');
+  const cv = useStore.getState().cameraView;
+  assert.equal(cv.view, 'bookmark'); assert.deepEqual(cv.position, [0, 0, 3]);
+  useStore.getState().recallBookmark('nope');
+  assert.equal(useStore.getState().cameraView.t, cv.t, 'unknown name must not move the camera');
+  useStore.getState().removeBookmark('front-close');
+  assert.equal(useStore.getState().viewport.bookmarks.length, 0);
+});
+
+check('clip patches merge without clobbering', () => {
+  vpScene();
+  useStore.getState().setClip({ axis: 'z', offsetMm: 12 });
+  useStore.getState().setClip({ enabled: true });
+  const c = useStore.getState().viewport.clip;
+  assert.equal(c.axis, 'z'); assert.equal(c.offsetMm, 12); assert.equal(c.enabled, true);
+  useStore.getState().setClip({ enabled: false, offsetMm: 0, axis: 'y', flip: false });
+  resetScene();
+});
+
+// ---------------------------------------------------------------------------
+section('20. COPILOT UI — natural language to a validated, reversible proposal');
+
+const cpScene = () => useStore.setState({ meshes: [
+  { id: 'm1', kind: 'box', label: 'enclosure shell', position: [0, 0.2, 0], scale: [1.4, 0.4, 0.9], material: 'steel' },
+  { id: 'm2', kind: 'cylinder', label: 'mounting boss A', position: [0.5, 0.3, 0.3], scale: 0.12, material: 'steel' },
+] });
+
+check('the parser maps the spec\'s own example sentences', () => {
+  const ctx = { bodies: [{ id: 'm1', role: 'structural' }, { id: 'm2', role: 'mounting' }] };
+  const l = CP.parseIntent('Make this enclosure 20% lighter while maintaining the same mounting points', ctx);
+  assert.equal(l.operation, 'lighten'); assert.equal(l.args.targetPct, 20);
+  assert.ok(l.args.preserve.includes('mounting'), 'must protect mounting');
+  const r = CP.parseIntent('Round all external edges with a 2 mm radius', ctx);
+  assert.equal(r.operation, 'round_corners'); assert.equal(r.args.radius_mm, 2);
+  const o = CP.parseIntent('This bracket is deforming too much under 500 N. Improve it', ctx);
+  assert.equal(o.operation, 'optimize_under_load'); assert.equal(o.args.load_N, 500);
+  const c = CP.parseIntent('chamfer the edges 1.5mm', ctx);
+  assert.equal(c.args.style, 'chamfer'); assert.equal(c.args.radius_mm, 1.5);
+  assert.equal(CP.parseIntent('paint it blue', ctx), null, 'unknown → null, not a guess');
+});
+
+check('a deterministic plan is labelled deterministic and warns it did not reason', async () => {
+  cpScene();
+  const r = await CP.planFromText('make it 20% lighter, keep the mounting bosses', { useAi: false });
+  assert.ok(r.ok, r.reason);
+  assert.equal(r.provenance.usedAi, false);
+  assert.ok(AP.shouldWarnNoAi(r.provenance));
+  assert.equal(r.proposal.op, 'lighten');
+  assert.ok(r.proposal.preserved.includes('m2'));
+  resetScene();
+});
+
+check('accept applies and re-measures; undo restores exactly', async () => {
+  cpScene();
+  const before = MC.buildModelContext().massProperties.totalMass_g;
+  const r = await CP.planFromText('make it 20% lighter', { useAi: false });
+  assert.ok(r.ok);
+  const a = CP.applyProposal(r.proposal);
+  assert.ok(a.applied);
+  assert.ok(a.measured.massAfter_g < before, 'mass must actually drop');
+  assert.ok(a.invalidates.includes('manufacturing_ready'));
+  const u = CP.revertProposal(a.revertToken);
+  assert.ok(u.reverted);
+  assert.ok(Math.abs(u.massNow_g - before) < 1e-6, 'undo must be exact');
+  resetScene();
+});
+
+check('a load-case request is refused honestly through the UI path', async () => {
+  cpScene();
+  const r = await CP.planFromText('this bracket deforms too much under 500 N, stiffen it', { useAi: false });
+  assert.equal(r.ok, false); assert.equal(r.refused, true);
+  assert.ok(/no FEA solver/i.test(r.reason));
+  assert.ok(r.alternatives.length >= 2);
+  resetScene();
+});
+
+check('an unknown request says so and offers examples, never a random op', async () => {
+  cpScene();
+  const r = await CP.planFromText('paint it blue and add glitter', { useAi: false });
+  assert.equal(r.ok, false); assert.equal(r.unknown, true);
+  assert.ok(r.hint && /lighter|round/.test(r.hint));
+  resetScene();
+});
+
+check('an empty model refuses to plan', async () => {
+  resetScene();
+  const r = await CP.planFromText('make it lighter', { useAi: false });
+  assert.equal(r.ok, false); assert.ok(/nothing in the model/i.test(r.reason));
+});
+
+check('with AI requested but unreachable, it falls back to the parser and SAYS so', async () => {
+  cpScene();
+  // no window.forge in Node → the AI call throws → classified → parser takes over
+  const r = await CP.planFromText('round the corners 2 mm', { useAi: true });
+  assert.ok(r.ok, r.reason);
+  assert.equal(r.provenance.usedAi, false);
+  assert.ok(r.provenance.attempts?.length >= 1, 'the failed AI attempt must be recorded');
+  resetScene();
+});
+
+check('a material request maps to real bodies and a real material', async () => {
+  cpScene();
+  const r = await CP.planFromText('switch it to aluminum, keep the mounting bosses', { useAi: false });
+  assert.ok(r.ok, r.reason);
+  assert.equal(r.proposal.op, 'set_material');
+  assert.ok(r.proposal.changes.every((c) => c.to === 'aluminum'));
+  assert.ok(!r.proposal.changes.some((c) => c.bodyId === 'm2'), 'the boss was to be kept');
+  resetScene();
+});
+
+// ---------------------------------------------------------------------------
+section('21. LOCAL AI — mode routing can never leak to the cloud');
+
+check('LOCAL mode exposes only the local model, even with cloud keys present', () => {
+  useStore.setState({ aiMode: 'local', localAiUp: true, hasAnthropicKey: true, hasGeminiKey: true, me: { hasAccount: true, plan: 'pro' } });
+  assert.deepEqual(availableModels(), ['local'], 'nothing but local may be offered');
+  useStore.setState({ aiMode: 'cloud', hasAnthropicKey: false, hasGeminiKey: false, me: null });
+});
+
+check('HYBRID mode lists local first, then the cloud models', () => {
+  useStore.setState({ aiMode: 'hybrid', localAiUp: false, me: { hasAccount: true, plan: 'free' } });
+  const m = availableModels();
+  assert.equal(m[0], 'local', 'local is tried first');
+  assert.ok(m.includes('anthropic') && m.includes('base'), 'cloud stays available as fallback');
+  useStore.setState({ aiMode: 'cloud', me: null });
+});
+
+check('CLOUD mode offers local only when a server was actually detected', () => {
+  useStore.setState({ aiMode: 'cloud', localAiUp: false, me: { hasAccount: true } });
+  assert.ok(!availableModels().includes('local'));
+  useStore.setState({ localAiUp: true });
+  assert.ok(availableModels().includes('local'));
+  useStore.setState({ localAiUp: null, me: null });
+});
+
+check('modelRoute explains local honestly, up or down', () => {
+  useStore.setState({ localAiUp: true, localAiUrl: 'http://localhost:1234/v1', localAiModel: 'qwen' });
+  const up = modelRoute('local');
+  assert.ok(up.reachable && /this machine/.test(up.via) && /nothing leaves/i.test(up.detail));
+  useStore.setState({ localAiUp: false });
+  const down = modelRoute('local');
+  assert.ok(!down.reachable && /LM Studio|Ollama/.test(down.detail));
+  useStore.setState({ localAiUp: null });
+});
+
+// ---------------------------------------------------------------------------
+section('22. CONSTRAINT SOLVER — mates solve, DOF counted, conflicts explained');
+
+const UNIT_MM = 83.33;
+const cnA = () => ({ id: 'A', label: 'base', kind: 'box', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 0.2, 1] });
+const cnB = () => ({ id: 'B', label: 'pin', kind: 'cylinder', position: [0.5, 0.7, 0.3], rotation: [0.3, 0.2, 0.1], scale: [0.1, 0.6, 0.1] });
+
+check('a pin mates onto a base and stands concentric — 1 DOF (its own spin) remains', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y' }), K.newConstraint('concentric', 'A', 'B', { axis: 'y' })], [cnA(), cnB()]);
+  assert.equal(r.status, 'under');
+  assert.equal(r.report.remainingDof, 1, 'a pin in a hole can still spin');
+  const p = r.poses.B.position.map((v) => v * UNIT_MM);
+  assert.ok(Math.abs(p[0]) < 0.05 && Math.abs(p[2]) < 0.05, 'centred on the base axis: ' + p);
+  assert.ok(Math.abs(p[1] - (8.333 + 25)) < 0.05, 'base half 8.33 + pin half 25 = 33.33: ' + p[1]);
+  assert.ok(r.residual < 1e-4);
+});
+
+check('a bare distance is under-constrained and honest about the 5 free DOF', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('distance', 'A', 'B', { mm: 40 })], [cnA(), cnB()]);
+  assert.equal(r.status, 'under'); assert.equal(r.report.remainingDof, 5);
+  assert.ok(Math.abs(Math.hypot(...r.poses.B.position.map((v) => v * UNIT_MM)) - 40) < 0.05);
+});
+
+check('two incompatible distances are a CONFLICT, named, with the compromise residual', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('distance', 'A', 'B', { mm: 20 }), K.newConstraint('distance', 'A', 'B', { mm: 30 })], [cnA(), cnB()]);
+  assert.equal(r.status, 'conflicting'); assert.equal(r.ok, false);
+  assert.equal(r.report.conflicts.length, 2, 'both distances carry residual');
+  assert.ok(/cannot all hold/.test(r.report.message) && /20 mm/.test(r.report.message) && /30 mm/.test(r.report.message));
+  assert.ok(Math.abs(r.residual - 10 / Math.SQRT2) < 0.1, 'compromise at 25 → each off by 5 → norm 7.07');
+});
+
+check('a conflicting solve is never applied to the model', () => {
+  useStore.setState({ meshes: [cnA(), cnB()], constraints: [K.newConstraint('fixed', 'A'), K.newConstraint('distance', 'A', 'B', { mm: 20 }), K.newConstraint('distance', 'A', 'B', { mm: 30 })] });
+  const before = JSON.stringify(useStore.getState().meshes.find((m) => m.id === 'B').position);
+  const r = K.solveAndApply({ apply: true });
+  assert.equal(r.ok, false);
+  assert.equal(JSON.stringify(useStore.getState().meshes.find((m) => m.id === 'B').position), before, 'a compromise must not be written');
+  useStore.setState({ meshes: [], constraints: [] });
+});
+
+check('repeated constraints are reported redundant, not conflicting', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('coincident', 'A', 'B'), K.newConstraint('parallel', 'A', 'B', { axis: 'y' }), K.newConstraint('parallel', 'A', 'B', { axis: 'y' }), K.newConstraint('angle', 'A', 'B', { axis: 'x', deg: 0 })], [cnA(), cnB()]);
+  assert.equal(r.status, 'over');
+  assert.ok(r.report.redundant >= 1);
+  assert.equal(r.report.remainingDof, 0);
+  assert.ok(r.residual < 1e-3);
+});
+
+check('perpendicular and angle constraints land on the right angle', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('coincident', 'A', 'B'), K.newConstraint('perpendicular', 'A', 'B', { axis: 'y' })], [cnA(), cnB()]);
+  assert.ok(r.residual < 1e-3);
+  const rot = r.poses.B.rotation;
+  // B's y-axis after rotation must be ⊥ to world y
+  const cx = Math.cos(rot[0]), sx = Math.sin(rot[0]), cy = Math.cos(rot[1]), sy = Math.sin(rot[1]);
+  const yAxis = [sx * sy, cx, sx * cy].map(Math.abs);   // rough: y-component of rotated y is cos(x)cos(z)…
+  const a = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('coincident', 'A', 'B'), K.newConstraint('angle', 'A', 'B', { axis: 'y', deg: 30 })], [cnA(), cnB()]);
+  assert.ok(a.residual < 1e-3, 'angle 30° solvable');
+});
+
+check('alongAxis places B at an exact world offset', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('alongAxis', 'A', 'B', { axis: 'x', mm: 75 })], [cnA(), cnB()]);
+  assert.ok(Math.abs(r.poses.B.position[0] * UNIT_MM - 75) < 0.05);
+});
+
+check('all-fixed reports satisfied and moves nothing', () => {
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('fixed', 'B')], [cnA(), cnB()]);
+  assert.equal(r.status, 'satisfied'); assert.deepEqual(r.poses, {});
+});
+
+check('a constraint to a missing body is ignored, not fatal', () => {
+  const r = K.solveConstraints([K.newConstraint('distance', 'A', 'GHOST', { mm: 10 })], [cnA()]);
+  assert.equal(r.status, 'none');
+});
+
+check('describeConstraint reads like an engineer wrote it', () => {
+  const L = (id) => ({ A: 'base', B: 'pin' })[id];
+  assert.equal(K.describeConstraint(K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y' }), L), 'base[+y] ▬ pin[-y]');
+  assert.equal(K.describeConstraint(K.newConstraint('distance', 'A', 'B', { mm: 12.5 }), L), 'base ↔ pin = 12.5 mm');
+  assert.equal(K.describeConstraint(K.newConstraint('fixed', 'A'), L), 'base fixed');
+});
+
+// ---------------------------------------------------------------------------
+for (const item of queue) {
+  if (item.kind === 'section') console.log(`\n${C.b}${item.t}${C.x}`);
+  else if (item.kind === 'bench') runBench(item);
+  else await runCheck(item);
+}
 console.log('\n' + '─'.repeat(64));
 if (timings.length) {
   console.log(`${C.b}Slowest operations${C.x}`);

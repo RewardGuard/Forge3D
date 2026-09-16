@@ -26,3 +26,4 @@ server/**/data.json
 
 # server-side host machine pin (runtime state)
 host-pin.json
+phone-body.step

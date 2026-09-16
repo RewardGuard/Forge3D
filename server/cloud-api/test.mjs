@@ -107,6 +107,17 @@ try {
   ok('health reports storageBilling flag', typeof (await get('/health')).body.storageBilling === 'boolean');
   ok('storage checkout without Stripe config → 503', (await post('/billing/checkout-storage', {}, TT)).status === 503);
   ok('storage grant defaults to 500GB in /me', meT0.body.storage.bytes === 500 * 1024 ** 3);
+
+  console.log('HF VIA CLOUD (vision + text-to-3D)');
+  // No HF_TOKEN in this test env → the routes must say so, not 500.
+  const v = await post('/v1/vision', { prompt: 'x', imageDataUrl: 'data:image/png;base64,AAAA' }, TT);
+  ok('vision without HF_TOKEN → 503 with a code', v.status === 503 && v.body.code === 'vision_unavailable');
+  const h3d = await post('/v1/hf-generate', { prompt: 'a cup' }, TT);
+  ok('text-to-3D without HF_TOKEN → 503 with a code', h3d.status === 503 && h3d.body.code === 'hf_unavailable');
+  ok('vision requires auth', (await post('/v1/vision', { imageDataUrl: 'x' })).status === 401);
+  ok('health reports vision + textTo3d flags', typeof (await get('/health')).body.vision === 'boolean');
+  ok('a FREE account can request Claude by name (no plan gate on provider)',
+    (await post('/v1/chat', { system: 's', user: 'u', provider: 'claude' }, TT)).status !== 403);
 } finally {
   server.kill();
   fs.rmSync(tmp, { recursive: true, force: true });

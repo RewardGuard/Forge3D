@@ -21,6 +21,8 @@
 // same validators (check_geometry / check_circuit / look).
 // ============================================================================
 import { useStore } from './store.js';
+import { classifyAiError, makeProvenance, AI_UNAVAILABLE } from './aiProvenance.js';
+import { evaluateReadiness } from './engineeringReport.js';
 import { parseAgentJson } from './agentJson.js';
 import { compactState, toolSpec, runTool, TOOLS } from './orchestraTools.js';
 import { captureViewportFresh } from './capture.js';
@@ -377,15 +379,63 @@ async function genericLoop(goal, headroom) {
 // + a button — not a lamp.
 // Models the user can use, BEST-CAPABILITY FIRST; the free base model is always
 // the floor at the end. Only models with a key are listed (base needs none).
-function availableModels() {
+// Models Orchestra can actually reach right now, best first.
+//
+// This used to require a personal API key for every provider, which made
+// "Claude" in the Director picker a dead card for anyone on a Pro plan: the
+// server holds an Anthropic key and can serve claude-sonnet-5, but the client
+// never knew. An entitled account (Pro or trial) can route the cloud-served
+// models WITHOUT pasting a key, so those count as available too.
+export function availableModels() {
   const s = S();
+  // Any Forge3D Cloud account reaches the cloud-served models — the free plan
+  // has a monthly token allowance, not a smaller model list. Gating this on
+  // "pro" made a fresh signup look like it had no AI at all.
+  const hasAccount = Boolean(s.me?.hasAccount || s.me?.email);
+  // A local server is a first-class model. In 'local' mode it is the ONLY
+  // one, so a run can never quietly reach the cloud when the user chose not to.
+  if (s.aiMode === 'local') return ['local'];
   const ranked = [
-    ['anthropic', s.hasAnthropicKey], ['gemini', s.hasGeminiKey], ['groq', s.hasGroqKey],
-    ['glm', s.hasGlmKey], ['mistral', s.hasMistralKey], ['openrouter', s.hasOpenrouterKey],
+    ['local', s.aiMode === 'hybrid' || s.localAiUp === true],
+    ['anthropic', s.hasAnthropicKey || hasAccount],
+    ['gemini', s.hasGeminiKey || hasAccount],
+    ['groq', s.hasGroqKey || hasAccount],
+    ['glm', s.hasGlmKey || hasAccount],
+    ['mistral', s.hasMistralKey || hasAccount],
+    ['openrouter', s.hasOpenrouterKey],
   ];
   const list = ranked.filter(([, k]) => k).map(([m]) => m);
   list.push('base');
   return list;
+}
+
+// How a chosen Director is actually reached: the user's own key, or the cloud
+// on their subscription. The UI shows this so nobody has to guess why a model
+// is or isn't usable.
+export function modelRoute(id) {
+  const s = S();
+  const ownKey = {
+    anthropic: s.hasAnthropicKey, gemini: s.hasGeminiKey, groq: s.hasGroqKey,
+    glm: s.hasGlmKey, mistral: s.hasMistralKey, openrouter: s.hasOpenrouterKey,
+  }[id];
+  if (ownKey) return { reachable: true, via: 'your API key', detail: 'Billed to your own provider account.' };
+  if (id === 'local') {
+    return s.localAiUp === false
+      ? { reachable: false, via: null, detail: `No local server answering at ${s.localAiUrl}. Start LM Studio or Ollama.`, fix: 'start_local' }
+      : { reachable: true, via: 'this machine', detail: `${s.localAiModel || 'first loaded model'} at ${s.localAiUrl} — no key, no allowance, nothing leaves your computer.` };
+  }
+
+  const hasAccount = Boolean(s.me?.hasAccount || s.me?.email);
+  const plan = s.me?.plan === 'pro' ? 'Pro' : s.me?.trial?.active ? 'trial' : 'free';
+  const cloudServed = ['anthropic', 'gemini', 'groq', 'glm', 'mistral'].includes(id);
+  if (id === 'base') return { reachable: true, via: 'Forge3D Cloud', detail: 'Claude by default, on your account allowance.' };
+  if (cloudServed && hasAccount) {
+    return { reachable: true, via: `Forge3D Cloud (${plan})`, detail: `Served by Forge3D Cloud on your ${plan} allowance — no API key needed.` };
+  }
+  if (cloudServed) {
+    return { reachable: false, via: null, detail: 'Sign in to Forge3D Cloud (free) or add your own API key.', fix: 'signin_or_key' };
+  }
+  return { reachable: false, via: null, detail: 'Needs your own API key.', fix: 'key' };
 }
 function setDirectorPersist(model) {
   S().setOrchestraDirector(model);
@@ -416,7 +466,14 @@ function validateFunctional(spec) {
 async function buildCircuitWithEscalation(spec) {
   const cPrompt = circuitPromptFromSpec(spec);
   const fPrompt = firmwarePromptFromSpec(spec);
-  for (const model of availableModels()) {
+  // Every model that drops out is recorded with a CLASSIFIED reason, so the UI
+  // can tell the user "your credits ran out" instead of a silent fallback.
+  const attempts = [];
+  const models = availableModels();
+  if (!models.length || (models.length === 1 && models[0] === 'base' && !S().hasCloudAccount)) {
+    attempts.push({ model: null, reason: AI_UNAVAILABLE.no_key.id, title: AI_UNAVAILABLE.no_key.title });
+  }
+  for (const model of models) {
     if (stopped()) return null;
     setDirectorPersist(model);
     useStore.getState().clearCircuit();
@@ -424,7 +481,12 @@ async function buildCircuitWithEscalation(spec) {
     act('use_model', { director: model }, { trying: model });
     const r = await runTool('build_circuit', { prompt: cPrompt }); // routed via provider: orchestraDirector
     S().orchestraAddTokens(1600);
-    if (!r.ok) { note(`${model}: circuit agent error — escalating to the next model.`); continue; }
+    if (!r.ok) {
+      const why = classifyAiError(r.error ?? r);
+      attempts.push({ model, reason: why.id, title: why.title, detail: String(r.error ?? '') });
+      note(`${model}: ${why.title} — escalating to the next model.`);
+      continue;
+    }
     act('build_circuit', { model }, r.result, true);
     const mcu = findMCU();
     if (mcu) { const g = await runTool('gen_code', { nodeId: mcu.id, prompt: fPrompt }); S().orchestraAddTokens(1800); act('gen_code', { model }, g.ok ? g.result : { error: g.error }, g.ok); }
@@ -432,19 +494,33 @@ async function buildCircuitWithEscalation(spec) {
     if (spec.isVehicle) assembleVehicle();
     const v = validateFunctional(spec);
     act('check_circuit', { model }, v);
-    if (v.ok) return { model, via: 'agent', v };
-    { const got = [v.leds && `LEDs ${v.leds}`, v.motors && `motors ${v.motors}`].filter(Boolean).join(', '); note(`${model}: the wiring didn't fully drive the outputs${got ? ` (${got})` : ''} — escalating to the next model.`); }
+    if (v.ok) {
+      const prov = makeProvenance('ai', { model, attempts });
+      S().orchestraSetProvenance(prov);
+      return { model, via: 'agent', v, provenance: prov };
+    }
+    {
+      const got = [v.leds && `LEDs ${v.leds}`, v.motors && `motors ${v.motors}`].filter(Boolean).join(', ');
+      attempts.push({ model, reason: AI_UNAVAILABLE.bad_output.id, title: AI_UNAVAILABLE.bad_output.title, detail: got });
+      note(`${model}: the wiring didn't fully drive the outputs${got ? ` (${got})` : ''} — escalating to the next model.`);
+    }
   }
-  // offline / every model failed → deterministic synthesizer (never fails)
-  note('No model produced a working circuit — falling back to the built-in synthesizer (offline-safe).');
+  // offline / every model failed → deterministic synthesizer.
+  // This still produces a correct circuit, but it is NOT AI work and the run
+  // is labelled accordingly all the way out to the UI.
+  const primary = attempts.find((a) => a.reason !== 'bad_output') || attempts[0] || null;
+  const reason = primary ? (AI_UNAVAILABLE[primary.reason] || AI_UNAVAILABLE.unknown) : AI_UNAVAILABLE.unknown;
+  note(`No AI model produced a working circuit (${reason.title}). Using the built-in deterministic synthesizer — this result is rule-based, not AI-generated.`);
   useStore.getState().clearCircuit();
   removeMountedParts();
   synthesizeCircuit(spec);
   mountByNetlist(spec);
   if (spec.isVehicle) assembleVehicle();
   const v = validateFunctional(spec);
-  act('check_circuit', { model: 'synth (offline)' }, v);
-  return { model: 'synth', via: 'synth', v };
+  act('check_circuit', { model: 'deterministic synthesizer (not AI)' }, v);
+  const prov = makeProvenance('deterministic', { reason, attempts });
+  S().orchestraSetProvenance(prov);
+  return { model: 'synth', via: 'synth', v, provenance: prov };
 }
 
 async function runStructurePipeline(goal, pattern, providedSpec) {
@@ -517,6 +593,24 @@ async function runStructurePipeline(goal, pattern, providedSpec) {
   const manufacturable = mfg.issues.length === 0;
   const conf = conforms(goal); // does it actually contain what the goal asked for?
   const ok = electricalOk && structuralOk && integrationOk && manufacturable && conf.ok;
+
+  // Staged engineering readiness. "manufacturable" above only means the DFM
+  // rules Forge3D can actually evaluate found nothing — it is NOT a
+  // manufacturing-ready verdict, and this ladder is what says so.
+  const readiness = evaluateReadiness({
+    spec,
+    geometry: { ok: structuralOk, issues: s2.issues.filter((i) => i.type === 'interference').map((i) => i.msg) },
+    simulation: { ran: hasMotors || hasInd, ok: electricalOk, issues: electricalOk ? [] : ['Outputs did not all respond in the visual simulation.'] },
+    structure: { ok: structuralOk, massG: s2.massG ?? null, issues: s2.issues.map((i) => i.msg || String(i)) },
+    manufacture: { printable: manufacturable, issues: mfg.issues.map((i) => i.msg || String(i)), warnings: mfg.warnings || [] },
+    process: 'fdm',
+  });
+  S().orchestraSetReadiness(readiness);
+  act('engineering_readiness', { process: 'fdm' }, {
+    reached: readiness.reachedLabel,
+    manufacturingReady: readiness.manufacturingReady,
+    blockers: readiness.blockers,
+  });
   const problems = [
     hasInd && ind.lit !== ind.total && `${ind.lit}/${ind.total} LEDs lit`,
     hasMotors && !mr.anyActive && 'motors don\'t run',

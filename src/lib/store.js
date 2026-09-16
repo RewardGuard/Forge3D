@@ -99,9 +99,22 @@ export const useStore = create((set, get) => ({
   orchestraTokens: 0, // rough token estimate spent this run (headroom meter)
   orchestraView: 'build', // build | sim — which live viewport the Orchestra stage shows
   orchestraPhase: '',     // current phase, shown as a live banner over the viewport
+  // Who actually produced the last run (AI / preset / deterministic) and why,
+  // plus the staged engineering readiness ladder. Both are rendered — a run
+  // must never look like AI work when a synthesizer did it.
+  orchestraProvenance: null,
+  orchestraReadiness: null,
   setOrchestraView: (orchestraView) => set({ orchestraView }),
   setOrchestraPhase: (orchestraPhase) => set({ orchestraPhase }),
+  orchestraSetProvenance: (orchestraProvenance) => set({ orchestraProvenance }),
+  orchestraSetReadiness: (orchestraReadiness) => set({ orchestraReadiness }),
   orchestraDirector: 'base',     // text provider that plans (free by default)
+  // Local AI (LM Studio / Ollama / any OpenAI-compatible server on this machine)
+  aiMode: 'cloud',               // cloud | local | hybrid
+  localAiUrl: 'http://localhost:1234/v1',
+  localAiModel: '',
+  localAiUp: null,               // last discovery: true/false/null(unknown)
+  setLocalAi: (patch) => set(patch),
   orchestraVision: 'hf-glm45v',  // vision model that inspects screenshots
   orchestraHeadroom: 'balanced', // eco | balanced | max — token/context budget
   setOrchestraDirector: (orchestraDirector) => set({ orchestraDirector }),
@@ -126,9 +139,9 @@ export const useStore = create((set, get) => ({
     set((s) => ({ bridgeEnabled, bridgeRunning: bridgeRunning ?? s.bridgeRunning })),
   setBridgeToken: (bridgeToken) => set({ bridgeToken: bridgeToken || '', hasBridgeToken: Boolean(bridgeToken) }),
   orchestraStart: (goal) =>
-    set({ orchestraStatus: 'running', orchestraGoal: goal || '', orchestraSteps: [], orchestraTokens: 0, orchestraView: 'build', orchestraPhase: 'Planning…' }),
+    set({ orchestraStatus: 'running', orchestraGoal: goal || '', orchestraSteps: [], orchestraTokens: 0, orchestraProvenance: null, orchestraReadiness: null, orchestraView: 'build', orchestraPhase: 'Planning…' }),
   orchestraSetStatus: (orchestraStatus) => set({ orchestraStatus }),
-  orchestraReset: () => set({ orchestraStatus: 'idle', orchestraGoal: '', orchestraSteps: [], orchestraTokens: 0 }),
+  orchestraReset: () => set({ orchestraStatus: 'idle', orchestraGoal: '', orchestraSteps: [], orchestraTokens: 0, orchestraProvenance: null, orchestraReadiness: null }),
   orchestraAddTokens: (n) => set((s) => ({ orchestraTokens: s.orchestraTokens + (Number(n) || 0) })),
   orchestraAddStep: (step) =>
     set((s) => ({ orchestraSteps: [...s.orchestraSteps, { n: s.orchestraSteps.length + 1, t: Date.now(), ...step }] })),
@@ -143,7 +156,44 @@ export const useStore = create((set, get) => ({
     }),
 
   // ---- camera view request (set_view tool → CameraRig snaps the angle) ----
-  cameraView: null, // { view:'front|back|left|right|top|iso', t:timestamp } | null
+  // ── Professional viewport ────────────────────────────────────────────────
+  // Projection, shading, section plane, visibility and bookmarks. Everything
+  // here is a DISPLAY choice: it never touches geometry, mass or export.
+  viewport: {
+    projection: 'perspective',   // perspective | orthographic
+    shading: 'shaded',           // shaded | edges | wireframe | xray
+    clip: { enabled: false, axis: 'y', offsetMm: 0, flip: false },
+    grid: true,
+    hiddenIds: [],               // hidden by the user
+    isolatedIds: null,           // when set, ONLY these are drawn
+    bookmarks: [],               // { name, position, target }
+  },
+  setViewport: (patch) => set((s) => ({ viewport: { ...s.viewport, ...patch } })),
+  setClip: (patch) => set((s) => ({ viewport: { ...s.viewport, clip: { ...s.viewport.clip, ...patch } } })),
+  hideSelected: () => set((s) => {
+    const ids = s.selectedMeshIds?.length ? s.selectedMeshIds : (s.selectedMeshId ? [s.selectedMeshId] : []);
+    return { viewport: { ...s.viewport, hiddenIds: [...new Set([...s.viewport.hiddenIds, ...ids])] }, selectedMeshId: null, selectedMeshIds: [] };
+  }),
+  isolateSelected: () => set((s) => {
+    const ids = s.selectedMeshIds?.length ? s.selectedMeshIds : (s.selectedMeshId ? [s.selectedMeshId] : []);
+    return ids.length ? { viewport: { ...s.viewport, isolatedIds: ids } } : {};
+  }),
+  showAll: () => set((s) => ({ viewport: { ...s.viewport, hiddenIds: [], isolatedIds: null } })),
+  addBookmark: (name, position, target) => set((s) => ({
+    viewport: { ...s.viewport, bookmarks: [...s.viewport.bookmarks.filter((b) => b.name !== name), { name, position, target }] },
+  })),
+  // The toolbar lives outside the Canvas and cannot read the camera; it asks,
+  // and CameraRig (inside) answers with the real position + orbit target.
+  bookmarkRequest: null,
+  requestBookmark: (name) => set({ bookmarkRequest: { name, t: Date.now() } }),
+  removeBookmark: (name) => set((s) => ({ viewport: { ...s.viewport, bookmarks: s.viewport.bookmarks.filter((b) => b.name !== name) } })),
+  // a bookmark recall is a camera move; CameraRig consumes it like a view
+  recallBookmark: (name) => set((s) => {
+    const b = s.viewport.bookmarks.find((x) => x.name === name);
+    return b ? { cameraView: { view: 'bookmark', position: b.position, target: b.target, t: Date.now() } } : {};
+  }),
+
+  cameraView: null, // { view:'front|back|left|right|top|bottom|iso|bookmark', t:timestamp } | null
   setCameraView: (view) => set({ cameraView: { view, t: Date.now() } }),
 
   // ---- UI / theme ----
@@ -293,6 +343,96 @@ export const useStore = create((set, get) => ({
       });
       return { meshes: keep, selectedMeshId: id, selectedMeshIds: [id] };
     }),
+  // ── Constraints (assembly mates) ────────────────────────────────────────
+  constraints: [],
+  addConstraint: (c) => set((s) => ({ constraints: [...s.constraints, c] })),
+  updateConstraint: (id, patch) => set((s) => ({ constraints: s.constraints.map((c) => (c.id === id ? { ...c, ...patch, params: { ...c.params, ...(patch.params || {}) } } : c)) })),
+  toggleConstraint: (id) => set((s) => ({ constraints: s.constraints.map((c) => (c.id === id ? { ...c, enabled: !c.enabled } : c)) })),
+  removeConstraint: (id) => set((s) => ({ constraints: s.constraints.filter((c) => c.id !== id) })),
+  constraintReport: null,
+  setConstraintReport: (constraintReport) => set({ constraintReport }),
+
+  // ── Assemblies ──────────────────────────────────────────────────────────
+  // assemblies[id] = { id, name, parentId }; a mesh's assemblyId points at
+  // one (or nothing = root). The tree is derived in assembly.js.
+  assemblies: {},
+  createAssembly: (name, meshIds = [], parentId = null) => {
+    const id = 'asm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    set((s) => ({
+      assemblies: { ...s.assemblies, [id]: { id, name: name || 'Subassembly', parentId: parentId && s.assemblies[parentId] ? parentId : null } },
+      meshes: s.meshes.map((m) => (meshIds.includes(m.id) ? { ...m, assemblyId: id } : m)),
+    }));
+    return id;
+  },
+  renameAssembly: (id, name) => set((s) => (s.assemblies[id] ? { assemblies: { ...s.assemblies, [id]: { ...s.assemblies[id], name } } } : {})),
+  // Dissolve: members and children go to the parent. Bodies are never deleted.
+  dissolveAssembly: (id) => set((s) => {
+    const a = s.assemblies[id]; if (!a) return {};
+    const rest = { ...s.assemblies }; delete rest[id];
+    for (const k of Object.keys(rest)) if (rest[k].parentId === id) rest[k] = { ...rest[k], parentId: a.parentId };
+    return { assemblies: rest, meshes: s.meshes.map((m) => (m.assemblyId === id ? { ...m, assemblyId: a.parentId || null } : m)) };
+  }),
+  moveMeshToAssembly: (meshId, assemblyId) => set((s) => ({
+    meshes: s.meshes.map((m) => (m.id === meshId ? { ...m, assemblyId: assemblyId && s.assemblies[assemblyId] ? assemblyId : null } : m)),
+  })),
+  moveAssembly: (id, newParentId) => set((s) => {
+    if (!s.assemblies[id]) return {};
+    // refuse cycles: walk up from the new parent
+    let cur = newParentId;
+    while (cur) { if (cur === id) return {}; cur = s.assemblies[cur]?.parentId; }
+    return { assemblies: { ...s.assemblies, [id]: { ...s.assemblies[id], parentId: newParentId && s.assemblies[newParentId] ? newParentId : null } } };
+  }),
+  // exploded view is display state; 0 = assembled
+  explode: 0,
+  setExplode: (explode) => set({ explode: Math.max(0, Math.min(3, Number(explode) || 0)) }),
+
+  // Body the Measure panel compares the selection against.
+  measureTarget: null,
+  setMeasureTarget: (measureTarget) => set({ measureTarget }),
+
+  // Edge selection for kernel operations: which edges of which body. Empty
+  // means 'all edges', which is what the buttons did before edges were
+  // pickable at all.
+  edgePick: { meshId: null, indices: [], active: false },
+  setEdgePickActive: (active) => set((s) => ({ edgePick: { ...s.edgePick, active, meshId: active ? s.selectedMeshId : null, indices: active ? s.edgePick.indices : [] } })),
+  toggleEdge: (meshId, index) => set((s) => {
+    const same = s.edgePick.meshId === meshId;
+    const cur = same ? s.edgePick.indices : [];
+    const next = cur.includes(index) ? cur.filter((i) => i !== index) : [...cur, index];
+    return { edgePick: { meshId, indices: next, active: true } };
+  }),
+  clearEdgePick: () => set({ edgePick: { meshId: null, indices: [], active: false } }),
+
+  // ── Parametric features ─────────────────────────────────────────────────
+  // mesh.features = [{ id, type, params, enabled }]; the geometry is
+  // regenerated by features.js and cached on featureGeom. Edits here only
+  // touch the list — regeneration is scheduled by the caller.
+  patchMesh: (id, patch) => set((s) => ({ meshes: s.meshes.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
+  addFeature: (id, feature) => set((s) => ({ meshes: s.meshes.map((m) => (m.id === id ? { ...m, features: [...(m.features || []), feature] } : m)) })),
+  updateFeature: (id, fid, params) => set((s) => ({ meshes: s.meshes.map((m) => (m.id === id
+    ? { ...m, features: (m.features || []).map((f) => (f.id === fid ? { ...f, params: { ...f.params, ...params } } : f)) } : m)) })),
+  toggleFeature: (id, fid) => set((s) => ({ meshes: s.meshes.map((m) => (m.id === id
+    ? { ...m, features: (m.features || []).map((f) => (f.id === fid ? { ...f, enabled: !f.enabled } : f)) } : m)) })),
+  removeFeature: (id, fid) => set((s) => ({ meshes: s.meshes.map((m) => (m.id === id ? { ...m, features: (m.features || []).filter((f) => f.id !== fid) } : m)) })),
+  moveFeature: (id, fid, dir) => set((s) => ({ meshes: s.meshes.map((m) => {
+    if (m.id !== id) return m;
+    const fs = [...(m.features || [])]; const i = fs.findIndex((f) => f.id === fid); const j = i + dir;
+    if (i < 0 || j < 0 || j >= fs.length) return m;
+    [fs[i], fs[j]] = [fs[j], fs[i]];
+    return { ...m, features: fs };
+  }) })),
+
+  // Swap one body for another, keeping its id, world position and selection.
+  // Used by the B-rep kernel: a filleted body is a baked solid, not the
+  // primitive it came from, but from the user's point of view it is still
+  // "that object" — same id, same place, still selected.
+  replaceMesh: (id, next) =>
+    set((s) => ({
+      meshes: s.meshes.map((m) => (m.id === id
+        ? { ...next, id, position: m.position, rotation: m.rotation, groupId: m.groupId, attachedTo: m.attachedTo }
+        : m)),
+    })),
+
   // reverse the spin direction a motor imparts on its attached object
   setSpinReverse: (id, spinReverse) =>
     set((s) => ({ meshes: s.meshes.map((m) => (m.id === id ? { ...m, spinReverse } : m)) })),
