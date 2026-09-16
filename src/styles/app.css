@@ -902,3 +902,37 @@ select:hover { border-color: var(--hover-border); }
 .ms-badge.kernel { background: color-mix(in srgb, #16a34a 18%, transparent); color: #16a34a; }
 .ms-badge.analytic { background: color-mix(in srgb, #d97706 18%, transparent); color: #d97706; }
 .link.small { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; }
+
+/* ── Copilot panel ────────────────────────────────────────────────────── */
+.cp { display: flex; flex-direction: column; gap: 6px; }
+.cp-examples { display: flex; flex-wrap: wrap; gap: 4px; }
+.cp-ex { border: 1px solid var(--border); background: transparent; color: inherit; font-size: 11px; padding: 3px 8px; border-radius: 999px; cursor: pointer; opacity: .8; }
+.cp-ex:hover:not(:disabled) { border-color: var(--accent); opacity: 1; }
+.cp-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.cp-card.ok { border-color: #16a34a; background: color-mix(in srgb, #16a34a 6%, transparent); }
+.cp-card.err { border-color: #dc2626; background: color-mix(in srgb, #dc2626 6%, transparent); }
+.cp-card.warn { border-color: #d97706; background: color-mix(in srgb, #d97706 6%, transparent); }
+.cp-card p { margin: 0; line-height: 1.45; }
+.cp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cp-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; border: 1px solid; }
+.cp-badge.ai { color: #3b82f6; border-color: #3b82f6; }
+.cp-badge.det { color: #d97706; border-color: #d97706; }
+.cp-why { font-style: italic; opacity: .85; }
+.cp-diff { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0; }
+.cp-diff td { padding: 3px 4px; border-bottom: 1px solid var(--border); }
+.cp-body { font-weight: 600; }
+.cp-field { opacity: .7; }
+.cp-from { opacity: .6; text-decoration: line-through; font-family: 'SF Mono', ui-monospace, Menlo, monospace; }
+.cp-arrow { opacity: .5; text-align: center; }
+.cp-to { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-weight: 600; }
+.cp-pred { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; background: var(--panel-2); border-radius: 6px; }
+.cp-pred .ok { color: #16a34a; font-weight: 600; } .cp-pred .warn { color: #d97706; font-weight: 600; }
+.cp-list { margin: 2px 0; padding-left: 18px; }
+.cp-list li { margin: 2px 0; line-height: 1.4; }
+.cp-reason { opacity: .9; }
+.cp-note { font-size: 11.5px; padding: 5px 8px; border-radius: 5px; }
+.cp-note.warn { background: color-mix(in srgb, #d97706 12%, transparent); color: #b45309; }
+.cp-caveats summary { cursor: pointer; font-size: 11.5px; opacity: .75; }
+.cp-hist { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.cp-hist-title { flex: 1; }
+.btn.small { padding: 2px 8px; font-size: 11px; }

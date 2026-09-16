@@ -25,6 +25,7 @@ import * as CI from '../src/lib/cadIntent.js';
 import * as RD from '../src/lib/rounding.js';
 import * as SS from '../src/lib/screenSim.js';
 import * as THREE from 'three';
+import * as CP from '../src/lib/copilot.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -1318,6 +1319,97 @@ check('clip patches merge without clobbering', () => {
   const c = useStore.getState().viewport.clip;
   assert.equal(c.axis, 'z'); assert.equal(c.offsetMm, 12); assert.equal(c.enabled, true);
   useStore.getState().setClip({ enabled: false, offsetMm: 0, axis: 'y', flip: false });
+  resetScene();
+});
+
+// ---------------------------------------------------------------------------
+section('20. COPILOT UI — natural language to a validated, reversible proposal');
+
+const cpScene = () => useStore.setState({ meshes: [
+  { id: 'm1', kind: 'box', label: 'enclosure shell', position: [0, 0.2, 0], scale: [1.4, 0.4, 0.9], material: 'steel' },
+  { id: 'm2', kind: 'cylinder', label: 'mounting boss A', position: [0.5, 0.3, 0.3], scale: 0.12, material: 'steel' },
+] });
+
+check('the parser maps the spec\'s own example sentences', () => {
+  const ctx = { bodies: [{ id: 'm1', role: 'structural' }, { id: 'm2', role: 'mounting' }] };
+  const l = CP.parseIntent('Make this enclosure 20% lighter while maintaining the same mounting points', ctx);
+  assert.equal(l.operation, 'lighten'); assert.equal(l.args.targetPct, 20);
+  assert.ok(l.args.preserve.includes('mounting'), 'must protect mounting');
+  const r = CP.parseIntent('Round all external edges with a 2 mm radius', ctx);
+  assert.equal(r.operation, 'round_corners'); assert.equal(r.args.radius_mm, 2);
+  const o = CP.parseIntent('This bracket is deforming too much under 500 N. Improve it', ctx);
+  assert.equal(o.operation, 'optimize_under_load'); assert.equal(o.args.load_N, 500);
+  const c = CP.parseIntent('chamfer the edges 1.5mm', ctx);
+  assert.equal(c.args.style, 'chamfer'); assert.equal(c.args.radius_mm, 1.5);
+  assert.equal(CP.parseIntent('paint it blue', ctx), null, 'unknown → null, not a guess');
+});
+
+check('a deterministic plan is labelled deterministic and warns it did not reason', async () => {
+  cpScene();
+  const r = await CP.planFromText('make it 20% lighter, keep the mounting bosses', { useAi: false });
+  assert.ok(r.ok, r.reason);
+  assert.equal(r.provenance.usedAi, false);
+  assert.ok(AP.shouldWarnNoAi(r.provenance));
+  assert.equal(r.proposal.op, 'lighten');
+  assert.ok(r.proposal.preserved.includes('m2'));
+  resetScene();
+});
+
+check('accept applies and re-measures; undo restores exactly', async () => {
+  cpScene();
+  const before = MC.buildModelContext().massProperties.totalMass_g;
+  const r = await CP.planFromText('make it 20% lighter', { useAi: false });
+  assert.ok(r.ok);
+  const a = CP.applyProposal(r.proposal);
+  assert.ok(a.applied);
+  assert.ok(a.measured.massAfter_g < before, 'mass must actually drop');
+  assert.ok(a.invalidates.includes('manufacturing_ready'));
+  const u = CP.revertProposal(a.revertToken);
+  assert.ok(u.reverted);
+  assert.ok(Math.abs(u.massNow_g - before) < 1e-6, 'undo must be exact');
+  resetScene();
+});
+
+check('a load-case request is refused honestly through the UI path', async () => {
+  cpScene();
+  const r = await CP.planFromText('this bracket deforms too much under 500 N, stiffen it', { useAi: false });
+  assert.equal(r.ok, false); assert.equal(r.refused, true);
+  assert.ok(/no FEA solver/i.test(r.reason));
+  assert.ok(r.alternatives.length >= 2);
+  resetScene();
+});
+
+check('an unknown request says so and offers examples, never a random op', async () => {
+  cpScene();
+  const r = await CP.planFromText('paint it blue and add glitter', { useAi: false });
+  assert.equal(r.ok, false); assert.equal(r.unknown, true);
+  assert.ok(r.hint && /lighter|round/.test(r.hint));
+  resetScene();
+});
+
+check('an empty model refuses to plan', async () => {
+  resetScene();
+  const r = await CP.planFromText('make it lighter', { useAi: false });
+  assert.equal(r.ok, false); assert.ok(/nothing in the model/i.test(r.reason));
+});
+
+check('with AI requested but unreachable, it falls back to the parser and SAYS so', async () => {
+  cpScene();
+  // no window.forge in Node → the AI call throws → classified → parser takes over
+  const r = await CP.planFromText('round the corners 2 mm', { useAi: true });
+  assert.ok(r.ok, r.reason);
+  assert.equal(r.provenance.usedAi, false);
+  assert.ok(r.provenance.attempts?.length >= 1, 'the failed AI attempt must be recorded');
+  resetScene();
+});
+
+check('a material request maps to real bodies and a real material', async () => {
+  cpScene();
+  const r = await CP.planFromText('switch it to aluminum, keep the mounting bosses', { useAi: false });
+  assert.ok(r.ok, r.reason);
+  assert.equal(r.proposal.op, 'set_material');
+  assert.ok(r.proposal.changes.every((c) => c.to === 'aluminum'));
+  assert.ok(!r.proposal.changes.some((c) => c.bodyId === 'm2'), 'the boss was to be kept');
   resetScene();
 });
 
