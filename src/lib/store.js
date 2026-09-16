@@ -337,6 +337,10 @@ export const useStore = create((set, get) => ({
       });
       return { meshes: keep, selectedMeshId: id, selectedMeshIds: [id] };
     }),
+  // Body the Measure panel compares the selection against.
+  measureTarget: null,
+  setMeasureTarget: (measureTarget) => set({ measureTarget }),
+
   // Edge selection for kernel operations: which edges of which body. Empty
   // means 'all edges', which is what the buttons did before edges were
   // pickable at all.

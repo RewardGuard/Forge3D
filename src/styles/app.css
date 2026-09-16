@@ -891,3 +891,14 @@ select:hover { border-color: var(--hover-border); }
 .vpt-note { margin: 0; font-size: 11px; opacity: .7; line-height: 1.4; }
 .vpt-bm { justify-content: space-between; }
 .vpt-bm .vpt-btn:first-child { flex: 1; text-align: left; }
+
+/* ── Measure panel ────────────────────────────────────────────────────── */
+.ms-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ms-table td { padding: 3px 4px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ms-k { opacity: .75; width: 40%; }
+.ms-v { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
+.ms-u { opacity: .6; font-size: 11px; white-space: nowrap; }
+.ms-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 999px; margin-left: 6px; }
+.ms-badge.kernel { background: color-mix(in srgb, #16a34a 18%, transparent); color: #16a34a; }
+.ms-badge.analytic { background: color-mix(in srgb, #d97706 18%, transparent); color: #d97706; }
+.link.small { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; }

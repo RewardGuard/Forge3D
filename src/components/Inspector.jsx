@@ -5,6 +5,7 @@ import { isRoundable, maxCornerRadiusMm, validateCornerRadius, trueDimsMm, CORNE
 import { runKernelOp, kernelSupports, edgeCount, meshToSTEP } from '../lib/kernelBridge.js';
 import { kernelStatus, KERNEL_UNLOCKS } from '../lib/kernel.js';
 import { ScreenPreview } from './ScreenFace.jsx';
+import MeasurePanel from './MeasurePanel.jsx';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 const AXES = ['x', 'y', 'z'];
@@ -220,6 +221,8 @@ export default function Inspector() {
           kernel and the reason is shown — no broken geometry is ever
           produced. The result is a baked solid, so the parametric primitive
           is gone until you undo. */}
+      <MeasurePanel mesh={mesh} />
+
       {kernelSupports(mesh.kind) && (
         <>
           <div className="divider" />

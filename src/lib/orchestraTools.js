@@ -11,6 +11,7 @@
 import { useStore } from './store.js';
 import { buildModelContext, contextToPrompt } from './modelContext.js';
 import { planOperation, applyProposal, revertProposal, operationCatalog } from './cadIntent.js';
+import { measureBody, measureBetween, measureScene } from './measure.js';
 import { captureViewportFresh } from './capture.js';
 import { buildNetlist, partsCatalog } from './netlist.js';
 import { PART_BY_ID, PARTS, DEFAULT_SHAPE_UNIT, SCENE_SCALE } from '../data/parts.js';
@@ -632,6 +633,28 @@ export const TOOLS = {
       const ctx = buildModelContext();
       return { summary: contextToPrompt(ctx), bodies: ctx.bodies, massProperties: ctx.massProperties, limitations: ctx.limitations };
     },
+  },
+
+  measure_body: {
+    desc: 'Exact properties of one body from the B-rep kernel: volume, surface area, mass (with material grade), centre of mass, inertia tensor, principal moments, radius of gyration, bounding box. Says "analytic" when the body is not a kernel solid and inertia is unavailable.',
+    params: { id: 'mesh id' },
+    run: async ({ id }) => {
+      const m = S().meshes.find((x) => x.id === id);
+      return m ? measureBody(m) : { ok: false, error: `no mesh ${id}` };
+    },
+  },
+  measure_between: {
+    desc: 'Distance and angle between two bodies: centre-to-centre, Δxyz, exact minimum surface-to-surface distance (kernel), whether they touch, and the angle between their axes.',
+    params: { a: 'mesh id', b: 'mesh id' },
+    run: async ({ a, b }) => {
+      const ma = S().meshes.find((x) => x.id === a), mb = S().meshes.find((x) => x.id === b);
+      return ma && mb ? measureBetween(ma, mb) : { ok: false, error: 'both ids must exist' };
+    },
+  },
+  measure_scene: {
+    desc: 'Totals for the whole model: mass, volume, centre of mass, and how many bodies were measured exactly vs analytically.',
+    params: {},
+    run: () => measureScene(),
   },
 
   list_operations: {

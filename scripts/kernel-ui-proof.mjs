@@ -2,6 +2,7 @@
 // primitive mesh → OCCT solid → operation → baked mesh the renderer draws.
 import assert from 'node:assert/strict';
 import { runKernelOp, edgeCount, meshToSTEP, kernelSupports, meshEdgePolylines } from '../src/lib/kernelBridge.js';
+import { measureBody, measureBetween, measureEdge, angleBetween } from '../src/lib/measure.js';
 
 const C = { g: '\x1b[32m', r: '\x1b[31m', d: '\x1b[2m', b: '\x1b[1m', x: '\x1b[0m' };
 let pass = 0, fail = 0;
@@ -133,6 +134,62 @@ await check('an out-of-range edge index is ignored, not fatal', async () => {
   const r = await runKernelOp(box, 'fillet', { radiusMm: 2, edgeIndices: [999] });
   assert.equal(r.ok, false);
   assert.ok(/No edge matched/i.test(r.reason));
+});
+
+await check('MEASURE: kernel volume, area, mass and inertia match analytic values', async () => {
+  const plate = { id: 'p', kind: 'box', label: 'plate', scale: [60 / 83.33, 20 / 83.33, 40 / 83.33], position: [0, 0, 0], rotation: [0, 0, 0], material: 'aluminum' };
+  const r = await measureBody(plate);
+  assert.equal(r.source, 'kernel');
+  assert.ok(Math.abs(r.volume_cm3 - 48) < 0.05, `volume ${r.volume_cm3}`);
+  assert.ok(Math.abs(r.surfaceArea_cm2 - 88) < 0.1, `area ${r.surfaceArea_cm2}`);
+  assert.ok(Math.abs(r.mass_g - 48 * 2.7) < 0.2, `mass ${r.mass_g}`);
+  const ixx = r.mass_g * (20 * 20 + 40 * 40) / 12;
+  assert.ok(Math.abs(r.inertia_g_mm2.Ixx - ixx) / ixx < 0.002, `Ixx ${r.inertia_g_mm2.Ixx} vs ${ixx}`);
+  assert.ok(r.principalMoments_g_mm2[0] >= r.principalMoments_g_mm2[2], 'principal moments sorted');
+  assert.ok(/6061/.test(r.material.grade), 'mass must quote the grade');
+});
+
+await check('MEASURE: centre of mass follows the body\'s position and rotation', async () => {
+  const b = { id: 'b', kind: 'box', scale: [0.5, 0.5, 0.5], position: [1, 0.25, -0.5], rotation: [0, Math.PI / 4, 0], material: 'pla' };
+  const r = await measureBody(b);
+  const U = 83.33;   // mm per scene unit
+  assert.ok(Math.abs(r.centreOfMass_mm[0] - 1 * U) < 0.1 && Math.abs(r.centreOfMass_mm[2] + 0.5 * U) < 0.1, JSON.stringify(r.centreOfMass_mm));
+});
+
+await check('MEASURE: minimum surface distance is exact and detects touching', async () => {
+  const a = { id: 'a', kind: 'box', scale: [60 / 83.33, 20 / 83.33, 40 / 83.33], position: [0, 0, 0], rotation: [0, 0, 0] };
+  const pin = { id: 'c', kind: 'cylinder', scale: 0.12, position: [0.9, 0, 0], rotation: [0, 0, 0] };
+  const d = await measureBetween(a, pin);
+  assert.equal(d.source, 'kernel');
+  assert.ok(Math.abs(d.minDistance_mm - 41) < 0.05, `min ${d.minDistance_mm} (75 − 30 − 4)`);
+  assert.ok(Math.abs(d.centreDistance_mm - 75) < 0.05);
+  const touch = await measureBetween(a, { ...pin, position: [(30 + 4) / 83.33, 0, 0] });   // 34 mm in scene units
+  assert.ok(touch.touching, `should touch at 34 mm, got ${touch.minDistance_mm}`);
+});
+
+await check('MEASURE: a circular edge reports its radius, a straight one does not', async () => {
+  const pin = { id: 'c', kind: 'cylinder', scale: 0.12, position: [0, 0, 0], rotation: [0, 0, 0] };
+  const e = await measureEdge(pin, 0);
+  assert.equal(e.type, 'circle');
+  assert.ok(Math.abs(e.radius_mm - 4) < 0.01);
+  assert.ok(Math.abs(e.length_mm - 2 * Math.PI * 4) < 0.01);
+  const box = { id: 'b', kind: 'box', scale: 1, position: [0, 0, 0], rotation: [0, 0, 0] };
+  const s = await measureEdge(box, 0);
+  assert.equal(s.type, 'line'); assert.equal(s.radius_mm, undefined);
+});
+
+await check('MEASURE: non-kernel bodies fall back honestly — no invented inertia', async () => {
+  const r = await measureBody({ id: 't', kind: 'torus', scale: 1, position: [0, 0, 0], rotation: [0, 0, 0] });
+  assert.equal(r.source, 'analytic');
+  assert.equal(r.inertia_g_mm2, null, 'must not fabricate a tensor');
+  assert.ok(/NOT computed/i.test(r.basis));
+  assert.ok(r.volume_cm3 > 0);
+});
+
+await check('MEASURE: angle between rotated bodies', () => {
+  assert.equal(angleBetween([0, 0, 0], [0, 0, 0]), 0);
+  assert.ok(Math.abs(angleBetween([0, 0, 0], [Math.PI / 2, 0, 0]) - 90) < 0.01);
+  assert.ok(Math.abs(angleBetween([0, 0, 0], [Math.PI, 0, 0]) - 180) < 0.01);
 });
 
 console.log('');
