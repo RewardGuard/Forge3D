@@ -66,7 +66,7 @@ export default function ProjectsModal() {
 
   return (
     <>
-      <button className="mini" onClick={() => setOpen(true)} title="Project library & production exports">📁 Projects</button>
+      <button className="mini" onClick={() => setOpen(true)} title="Project library & production exports">📁 <span className="btn-txt">Projects</span></button>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>

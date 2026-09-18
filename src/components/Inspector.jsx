@@ -38,8 +38,6 @@ export default function Inspector() {
   const edgePick = useStore((s) => s.edgePick);
   const setEdgePickActive = useStore((s) => s.setEdgePickActive);
   const clearEdgePick = useStore((s) => s.clearEdgePick);
-  const pickingThis = edgePick.active && edgePick.meshId === mesh?.id;
-  const pickedCount = pickingThis ? edgePick.indices.length : 0;
   const removeMesh = useStore((s) => s.removeMesh);
   const transformMode = useStore((s) => s.transformMode);
   const setTransformMode = useStore((s) => s.setTransformMode);
@@ -49,6 +47,10 @@ export default function Inspector() {
   const setAttachment = useStore((s) => s.setAttachment);
   const clipboard = useStore((s) => s.clipboard);
   const mesh = meshes.find((m) => m.id === selectedId);
+  // (must come after `mesh` — reading it earlier threw a TDZ error the moment
+  // edge picking switched on, which took the whole app down)
+  const pickingThis = edgePick.active && edgePick.meshId === mesh?.id;
+  const pickedCount = pickingThis ? edgePick.indices.length : 0;
 
   if (!mesh) {
     return (

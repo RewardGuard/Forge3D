@@ -39,9 +39,10 @@ async function worldShape(mesh) {
   if (!local) return null;
   const tr = new oc.gp_Trsf_1();
   const [rx, ry, rz] = mesh.rotation || [0, 0, 0];
-  // three applies XYZ Euler; compose the same order
+  // three's Euler 'XYZ' is R = Rx·Ry·Rz — INTRINSIC X-Y-Z in OCCT's terms
+  // (extrinsic XYZ would be Rz·Ry·Rx and mis-place every two-axis rotation)
   const q = new oc.gp_Quaternion_1();
-  q.SetEulerAngles(oc.gp_EulerSequence.gp_Extrinsic_XYZ, rx, ry, rz);
+  q.SetEulerAngles(oc.gp_EulerSequence.gp_Intrinsic_XYZ, rx, ry, rz);
   tr.SetRotation_2(q);
   const [px, py, pz] = (mesh.position || [0, 0, 0]).map(toMm);
   const t2 = new oc.gp_Trsf_1();
@@ -180,14 +181,10 @@ export async function measureBetween(a, b) {
 
 // Angle between the two bodies' local Z axes (their "up"), in degrees.
 export function angleBetween(rotA = [0, 0, 0], rotB = [0, 0, 0]) {
-  const axis = (r) => {
-    const [x, y, z] = r;
-    // rotate (0,0,1) by XYZ Euler
-    const cx = Math.cos(x), sx = Math.sin(x), cy = Math.cos(y), sy = Math.sin(y), cz = Math.cos(z), sz = Math.sin(z);
-    // R = Rz·Ry·Rx applied to (0,0,1)
-    const v1 = [0, -sx, cx];                                    // Rx
-    const v2 = [v1[0] * cy + v1[2] * sy, v1[1], -v1[0] * sy + v1[2] * cy]; // Ry
-    return [v2[0] * cz - v2[1] * sz, v2[0] * sz + v2[1] * cz, v2[2]];     // Rz
+  // third column of three's XYZ rotation matrix (R = Rx·Ry·Rz) = R·(0,0,1)
+  const axis = ([x, y, z]) => {
+    const cx = Math.cos(x), sx = Math.sin(x), cy = Math.cos(y), sy = Math.sin(y);
+    return [sy, -sx * cy, cx * cy];
   };
   const u = axis(rotA), v = axis(rotB);
   const dot = Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1] + u[2] * v[2]));

@@ -1538,6 +1538,59 @@ check('describeConstraint reads like an engineer wrote it', () => {
   assert.equal(K.describeConstraint(K.newConstraint('fixed', 'A'), L), 'base fixed');
 });
 
+// The bugs below were found by clicking through the UI, not by the suite —
+// every one of them is now pinned here.
+check('rotMat is three.js Euler XYZ (Rx·Ry·Rz), not Rz·Ry·Rx — checked against three itself', () => {
+  const e = [0.5, 0.7, 0.3];
+  const m = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(...e, 'XYZ')).elements;
+  const T = [[m[0], m[4], m[8]], [m[1], m[5], m[9]], [m[2], m[6], m[10]]];
+  const R = K.rotMat(e);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) assert.ok(Math.abs(R[i][j] - T[i][j]) < 1e-12, `R[${i}][${j}]`);
+  const back = K.eulerFromMat(R);
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(back[i] - e[i]) < 1e-9, 'eulerFromMat round-trips');
+});
+
+check('a wheel lying on its side (rx = 90°) mates flat onto the chassis top — no gimbal lock', () => {
+  const chassis = { id: 'A', label: 'Chassis', kind: 'box', position: [0, 0.5, 0], rotation: [0, 0, 0], scale: [1.6, 0.6, 1] };
+  const wheel = { id: 'B', label: 'Wheel', kind: 'cylinder', position: [0.8, 0.3, 0.7], rotation: [Math.PI / 2, 0, 0], scale: [0.5, 0.2, 0.5] };
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y' })], [chassis, wheel]);
+  assert.equal(r.status, 'under', r.report.message);
+  assert.equal(r.report.remainingDof, 3, 'slide x, slide z, spin about y');
+  assert.equal(r.report.redundant, 0, 'a single mate is 3 DOF — its 3-component normal residual must not read as redundant');
+  assert.ok(r.residual < 1e-4);
+  assert.ok(Math.abs(r.poses.B.position[1] - 0.9) < 1e-4, 'chassis top 0.8 + wheel half-height 0.1: ' + r.poses.B.position[1]);
+  assert.ok(r.poses.B.rotation.every((v) => Math.abs(v) < 1e-4), 'wheel rotated back flat: ' + r.poses.B.rotation);
+});
+
+check('mate gap keeps B ABOVE the face, not sunk into it', () => {
+  const a = { id: 'A', label: 'A', kind: 'box', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+  const b = { id: 'B', label: 'B', kind: 'box', position: [0, 3, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y', gap: 5 })], [a, b]);
+  const yMm = r.poses.B.position[1] * UNIT_MM;
+  assert.ok(Math.abs(yMm - (41.665 + 5 + 41.665)) < 0.05, 'A top 41.67 + 5 mm gap + B half 41.67 = 88.3, got ' + yMm);
+});
+
+check('faces pointing the SAME way are not accepted as mated (cross-product trap)', () => {
+  // B starts inside A with its -y face pointing up like A's +y: a cross product
+  // residual is zero here; the sum-of-normals residual is not.
+  const a = { id: 'A', label: 'A', kind: 'box', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+  const b = { id: 'B', label: 'B', kind: 'box', position: [0, 0, 0], rotation: [Math.PI, 0, 0], scale: [1, 1, 1] };
+  const r = K.solveConstraints([K.newConstraint('fixed', 'A'), K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y' })], [a, b]);
+  assert.ok(r.residual < 1e-4);
+  assert.ok(Math.abs(r.poses.B.position[1] - 1) < 1e-3, 'B must be lifted onto A, not left overlapping: ' + r.poses.B.position);
+});
+
+check('with nothing fixed the first body is grounded and the report says so', () => {
+  const a = { id: 'A', label: 'Base', kind: 'box', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+  const b = { id: 'B', label: 'Lid', kind: 'box', position: [2, 2, 2], rotation: [0.4, 0.2, 0], scale: [1, 0.2, 1] };
+  const r = K.solveConstraints([K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y' })], [a, b]);
+  assert.equal(r.report.grounded, 'A');
+  assert.ok(/Base is grounded/.test(r.report.message), r.report.message);
+  assert.equal(r.poses.A, undefined, 'the grounded body never moves');
+  const [rx, , rz] = r.poses.B.rotation;
+  assert.ok(Math.abs(rx) < 1e-4 && Math.abs(rz) < 1e-4, 'the lid is levelled onto the base (its yaw is a free DOF): ' + r.poses.B.rotation);
+});
+
 // ---------------------------------------------------------------------------
 for (const item of queue) {
   if (item.kind === 'section') console.log(`\n${C.b}${item.t}${C.x}`);

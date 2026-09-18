@@ -24,6 +24,11 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      # Correctness lint + the Node test suites gate every installer. A TDZ
+      # crash and an undefined module reference both shipped in 0.2.0 because
+      # nothing here ran before the build.
+      - run: npm run lint
+      - run: npm test
       - run: npm run build
       # --publish never: on tag builds electron-builder tries to self-publish
       # to GitHub releases and dies without a token — the release step below

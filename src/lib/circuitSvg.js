@@ -34,7 +34,12 @@ export function circuitToSvg(nodes, wires, opts = {}) {
 
   for (const node of nodes) {
     const part = PART_BY_ID[node.partId];
+    if (!part) continue;                       // a part the catalogue no longer has
     const idxMap = pinIndexMap(part);
+    // the name is printed 8 px above the node box, above its first pin — it has
+    // to be inside the sheet too, or the top part ships without a label
+    minX = Math.min(minX, node.x); minY = Math.min(minY, node.y - 18);
+    maxX = Math.max(maxX, node.x + part.name.length * 5.5);
     for (const pin of part.pins) {
       const pos = pinPosition(node, idxMap[pin], part.pins.length);
       pinPts[`${node.id}:${pin}`] = pos;
@@ -70,6 +75,7 @@ export function circuitToSvg(nodes, wires, opts = {}) {
     .join('\n    ');
 
   const labels = nodes
+    .filter((n) => PART_BY_ID[n.partId])
     .map((n) => {
       const part = PART_BY_ID[n.partId];
       return `<text x="${tx(n.x)}" y="${ty(n.y - 8)}" font-family="monospace" font-size="9" fill="#444">${escapeXml(part.name)}</text>`;

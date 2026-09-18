@@ -54,7 +54,6 @@ function useLoadedModel(mesh) {
       }, undefined, () => { clearTimeout(timer); finish(null); });
     }
     return () => { done = true; clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, kind]);
   return obj;
 }
@@ -351,7 +350,6 @@ function Engine({ running, hazards, onReport, stateRef, resetSignal, drivenIds, 
   useEffect(() => {
     stateRef.current = initLifeState(meshes);
     onReport(stateRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meshes, resetSignal]);
 
   useFrame((_, dtRaw) => {

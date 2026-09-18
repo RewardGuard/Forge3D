@@ -257,7 +257,7 @@ export default function OrchestraPanel() {
           <div className="orc-examples">
             {EXAMPLES.map((ex, i) => (
               <button key={i} className="orc-chip" disabled={running} onClick={() => setDraft(ex)} title={ex}>
-                {ex.split(':')[0].split('.')[0].slice(0, 42)}…
+                {ex.split(':')[0].split('.')[0]}
               </button>
             ))}
           </div>
@@ -305,8 +305,13 @@ export default function OrchestraPanel() {
 
       {/* the timeline still streams alongside, for the detail */}
       <aside className="orc-timeline">
-        <ProvenanceBanner prov={provenance} />
-        <ReadinessLadder readiness={readiness} />
+        {/* verdicts stay pinned above the log; they scroll on their own if long */}
+        {(provenance || readiness) && (
+          <div className="orc-verdicts">
+            <ProvenanceBanner prov={provenance} />
+            <ReadinessLadder readiness={readiness} />
+          </div>
+        )}
         <div className="orc-log" ref={logRef}>
           {steps.length === 0 ? (
             <p className="muted small" style={{ padding: 12 }}>The director's plan, tool calls, validations and screenshots stream here as it works.</p>

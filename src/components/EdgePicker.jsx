@@ -49,7 +49,7 @@ export default function EdgePicker({ mesh }) {
     let live = true;
     meshEdgePolylines(mesh).then((e) => { if (live) setEdges(e); });
     return () => { live = false; };
-  }, [active, mesh.id, sig]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active, mesh.id, sig]);
 
   if (!active || !edges.length) return null;
 

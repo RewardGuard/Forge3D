@@ -22,6 +22,8 @@ import { resetScene, autonomousDesign, iterateToValid, conforms } from '../../sr
 import { runTool, TOOLS } from '../../src/lib/orchestraTools.js';
 import { seedSpec } from '../../src/lib/orchestraSpec.js';
 
+const round = (a) => (Array.isArray(a) ? a.map((n) => +(+n).toFixed(2)) : a);
+
 // Tools that touch window.forge / DOM / the running physics loop — meaningless
 // without the live desktop app. Everything else in TOOLS is pure store work.
 export const LIVE_ONLY = new Set([
@@ -59,7 +61,6 @@ function captureDesign() {
     firmware: s.codeByNode || {},
   };
 }
-const round = (a) => (Array.isArray(a) ? a.map((n) => +(+n).toFixed(2)) : a);
 
 // The headline cloud action: a whole goal → a complete, validated design.
 function orchestrateCloud(goal) {

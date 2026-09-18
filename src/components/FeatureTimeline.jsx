@@ -18,7 +18,7 @@ export default function FeatureTimeline({ mesh }) {
 
   // any change to the base or the list → regenerate (debounced)
   const sig = mesh ? featureSignature(mesh) : '';
-  useEffect(() => { if (mesh && features.length) scheduleRegenerate(mesh.id); }, [sig]); // eslint-disable-line
+  useEffect(() => { if (mesh && features.length) scheduleRegenerate(mesh.id); }, [sig]);
 
   if (!features.length) return null;
   const stepOf = (id) => (mesh.featureSteps || []).find((s) => s.id === id);
@@ -37,8 +37,7 @@ export default function FeatureTimeline({ mesh }) {
             <div className="ft-head">
               <button className="ft-tog" title={f.enabled ? 'Suppress' : 'Unsuppress'} onClick={() => toggleFeature(mesh.id, f.id)}>{f.enabled ? '●' : '○'}</button>
               <span className="ft-icon">{def?.icon}</span>
-              <span className="ft-title">{describeFeature(f)}</span>
-              {st?.ok && st.faces && <span className="muted small">{st.faces} faces</span>}
+              <span className="ft-title" title={describeFeature(f)}>{describeFeature(f)}</span>
               <span className="ft-actions">
                 <button className="ft-btn" disabled={i === 0} onClick={() => moveFeature(mesh.id, f.id, -1)} title="Earlier">↑</button>
                 <button className="ft-btn" disabled={i === features.length - 1} onClick={() => moveFeature(mesh.id, f.id, 1)} title="Later">↓</button>
@@ -46,6 +45,7 @@ export default function FeatureTimeline({ mesh }) {
               </span>
             </div>
             <div className="ft-params">
+              {st?.ok && st.faces && <span className="muted small ft-faces" title="Faces before → after this step">{st.faces} faces</span>}
               {f.type === 'fillet' && (
                 <label>r <input type="number" step="0.1" min="0.01" value={f.params.radius_mm} onChange={(e) => updateFeature(mesh.id, f.id, { radius_mm: parseFloat(e.target.value) || 0.01 })} /> mm</label>
               )}

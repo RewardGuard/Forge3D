@@ -43,7 +43,7 @@ export default function ConstraintPanel() {
 
   return (
     <div className="cn">
-      <label className="lbl">Constraints <span className="muted">— {constraints.length} · select 1–2 bodies, pick a type, add</span></label>
+      <p className="muted small" style={{ margin: 0 }}>Select 1–2 bodies in the viewport, pick a mate type, add. The solver reports freedom left and conflicts.</p>
       <div className="row">
         <select value={type} onChange={(e) => setType(e.target.value)} title={def?.hint}>
           {Object.entries(CONSTRAINT_TYPES).map(([id, d]) => <option key={id} value={id}>{d.label} (−{d.dof} DOF)</option>)}

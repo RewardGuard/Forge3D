@@ -3,10 +3,13 @@
 // whether it came from the kernel (exact) or the primitive model (analytic).
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../lib/store.js';
+import { featureSignature } from '../lib/features.js';
 import { measureBody, measureBetween, measureEdge } from '../lib/measure.js';
 
 const fmt = (v, d = 2) => (Number.isFinite(v) ? Number(v).toFixed(d) : '—');
 const vec = (a, d = 1) => (Array.isArray(a) ? a.map((v) => fmt(v, d)).join(', ') : '—');
+// dimensions read as W × H × D, the way a drawing title block writes them
+const dims = (a, d = 1) => (Array.isArray(a) ? a.map((v) => fmt(v, d)).join(' × ') : '—');
 
 function Row({ k, v, unit }) {
   return <tr><td className="ms-k">{k}</td><td className="ms-v">{v}</td><td className="ms-u">{unit || ''}</td></tr>;
@@ -22,13 +25,16 @@ export default function MeasurePanel({ mesh }) {
   const [edge, setEdge] = useState(null);
   const [showInertia, setShowInertia] = useState(false);
 
-  const sig = mesh ? `${mesh.id}|${mesh.kind}|${JSON.stringify(mesh.scale)}|${JSON.stringify(mesh.position)}|${JSON.stringify(mesh.rotation)}|${mesh.material || ''}|${mesh.cornerRadius_mm || 0}` : '';
+  // re-measure when the body changes — including its feature list and when
+  // a feature regeneration finishes, or the panel would keep quoting the
+  // un-filleted volume as "exact"
+  const sig = mesh ? `${mesh.id}|${mesh.kind}|${JSON.stringify(mesh.scale)}|${JSON.stringify(mesh.position)}|${JSON.stringify(mesh.rotation)}|${mesh.material || ''}|${mesh.cornerRadius_mm || 0}|${featureSignature(mesh)}|${mesh.featureBusy ? 'busy' : 'idle'}` : '';
   useEffect(() => {
     let live = true;
     if (!mesh) { setBody(null); return; }
     measureBody(mesh).then((r) => { if (live) setBody(r); });
     return () => { live = false; };
-  }, [sig]); // eslint-disable-line
+  }, [sig]);
 
   const other = measureTarget ? meshes.find((m) => m.id === measureTarget) : null;
   useEffect(() => {
@@ -36,7 +42,7 @@ export default function MeasurePanel({ mesh }) {
     if (!mesh || !other) { setBetween(null); return; }
     measureBetween(mesh, other).then((r) => { if (live) setBetween(r); });
     return () => { live = false; };
-  }, [sig, other?.id, JSON.stringify(other?.position), JSON.stringify(other?.rotation)]); // eslint-disable-line
+  }, [sig, other?.id, JSON.stringify(other?.position), JSON.stringify(other?.rotation)]);
 
   const pickedEdge = edgePick.active && edgePick.meshId === mesh?.id && edgePick.indices.length === 1 ? edgePick.indices[0] : null;
   useEffect(() => {
@@ -44,7 +50,7 @@ export default function MeasurePanel({ mesh }) {
     if (pickedEdge == null) { setEdge(null); return; }
     measureEdge(mesh, pickedEdge).then((r) => { if (live) setEdge(r); });
     return () => { live = false; };
-  }, [sig, pickedEdge]); // eslint-disable-line
+  }, [sig, pickedEdge]);
 
   if (!mesh) return null;
 
@@ -56,7 +62,7 @@ export default function MeasurePanel({ mesh }) {
       </label>
       {body?.ok && (
         <table className="ms-table"><tbody>
-          <Row k="Bounding box" v={vec(body.boundingBox?.size_mm)} unit="mm" />
+          <Row k="Bounding box" v={dims(body.boundingBox?.size_mm)} unit="mm" />
           <Row k="Volume" v={fmt(body.volume_cm3, 3)} unit="cm³" />
           <Row k="Surface area" v={fmt(body.surfaceArea_cm2, 2)} unit="cm²" />
           <Row k="Mass" v={fmt(body.mass_g, 2)} unit={`g · ${body.material.name}`} />

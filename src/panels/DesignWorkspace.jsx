@@ -8,8 +8,12 @@ import MeshyPanel from '../components/MeshyPanel.jsx';
 import ThingiversePanel from '../components/ThingiversePanel.jsx';
 import AiDesignPanel from '../components/AiDesignPanel.jsx';
 import Inspector from '../components/Inspector.jsx';
+import PrimitivesPanel from '../components/PrimitivesPanel.jsx';
+import SideSection from '../components/SideSection.jsx';
 import { useStore } from '../lib/store.js';
 import { exportSceneToGltf, exportSceneToGlb } from '../lib/exportScene.js';
+
+const SOURCE_LABEL = { generate: 'AI mesh', claude: 'Claude', orchestra: 'Orchestra', thingiverse: 'Thingiverse' };
 
 export default function DesignWorkspace() {
   const [source, setSource] = useState('generate'); // generate | thingiverse
@@ -17,6 +21,8 @@ export default function DesignWorkspace() {
   const projectCircuitTo3D = useStore((s) => s.projectCircuitTo3D);
   const nodeCount = useStore((s) => s.nodes.length);
   const meshes = useStore((s) => s.meshes);
+  const constraintCount = useStore((s) => s.constraints.length);
+  const assemblyCount = useStore((s) => Object.keys(s.assemblies || {}).length);
   const exportQuality = useStore((s) => s.exportQuality);
 
   async function exportGltf() {
@@ -56,29 +62,45 @@ export default function DesignWorkspace() {
 
   return (
     <div className="layout three-col">
-      <aside className="sidebar left" style={{ flexDirection: 'column' }}>
-        <CopilotPanel />
-        <div className="divider" />
-        <AssemblyPanel />
-        <div className="divider" />
-        <ConstraintPanel />
-        <div className="divider" />
-        <div className="seg" style={{ padding: '12px 14px 0', flexWrap: 'wrap', gap: 6 }}>
-          <button className={'seg-btn' + (source === 'generate' ? ' on' : '')} onClick={() => setSource('generate')}>AI Generate</button>
-          <button className={'seg-btn' + (source === 'claude' ? ' on' : '')} onClick={() => setSource('claude')}>Claude Design</button>
-          <button className={'seg-btn' + (source === 'orchestra' ? ' on' : '')} onClick={() => setSource('orchestra')}>✦ Orchestra</button>
-          <button className={'seg-btn' + (source === 'thingiverse' ? ' on' : '')} onClick={() => setSource('thingiverse')}>Thingiverse</button>
+      <aside className="sidebar left">
+        {/* One scrolling column. Every tool is a foldable section so the
+            sidebar never grows past what the user can reach. */}
+        <div className="side-scroll">
+          <SideSection title="Add geometry" summary={`${meshes.length} ${meshes.length === 1 ? 'body' : 'bodies'}`}>
+            <PrimitivesPanel />
+          </SideSection>
+
+          <SideSection title="Generate" summary={SOURCE_LABEL[source]}>
+            <div className="seg grid2">
+              <button className={'seg-btn' + (source === 'generate' ? ' on' : '')} onClick={() => setSource('generate')}>AI mesh</button>
+              <button className={'seg-btn' + (source === 'claude' ? ' on' : '')} onClick={() => setSource('claude')}>Claude</button>
+              <button className={'seg-btn' + (source === 'orchestra' ? ' on' : '')} onClick={() => setSource('orchestra')}>✦ Orchestra</button>
+              <button className={'seg-btn' + (source === 'thingiverse' ? ' on' : '')} onClick={() => setSource('thingiverse')}>Thingiverse</button>
+            </div>
+            {source === 'generate' && <MeshyPanel />}
+            {source === 'claude' && <AiDesignPanel mode="claude" />}
+            {source === 'orchestra' && <AiDesignPanel mode="orchestra" />}
+            {source === 'thingiverse' && <ThingiversePanel />}
+          </SideSection>
+
+          <SideSection title="Copilot" summary="ask for a change">
+            <CopilotPanel />
+          </SideSection>
+
+          <SideSection title="Assembly" summary={assemblyCount ? `${assemblyCount} sub` : 'flat'} defaultOpen={false}>
+            <AssemblyPanel />
+          </SideSection>
+
+          <SideSection title="Constraints" summary={constraintCount ? String(constraintCount) : 'none'} defaultOpen={false}>
+            <ConstraintPanel />
+          </SideSection>
         </div>
-        {source === 'generate' && <MeshyPanel />}
-        {source === 'claude' && <AiDesignPanel mode="claude" />}
-        {source === 'orchestra' && <AiDesignPanel mode="orchestra" />}
-        {source === 'thingiverse' && <ThingiversePanel />}
       </aside>
 
       <section className="viewport">
         <Viewport3D />
         <ViewportToolbar />
-        <div className="viewport-overlay row">
+        <div className="viewport-overlay bottom row">
           <button className="btn" onClick={projectCircuitTo3D} disabled={nodeCount === 0} title="Place circuit parts at real-world scale into the 3D scene">
             ⤢ Import circuit parts ({nodeCount})
           </button>

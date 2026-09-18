@@ -14,21 +14,6 @@ function mockKindFromPrompt(prompt) {
 
 const PROVIDER_LABEL = { mock: 'mock', hf: 'Hugging Face', meshy: 'Meshy' };
 
-// Built-in primitive shapes the user can drop straight into the scene.
-const PRIMITIVES = [
-  { kind: 'box', label: 'Box', color: '#7c93b8' },
-  { kind: 'sphere', label: 'Sphere', color: '#b88a8a' },
-  { kind: 'cylinder', label: 'Cylinder', color: '#8ab89a' },
-  { kind: 'cone', label: 'Cone', color: '#b8a07c' },
-  { kind: 'pyramid', label: 'Pyramid', color: '#a98ab8' },
-  { kind: 'torus', label: 'Torus', color: '#8ab8b2' },
-  { kind: 'torusknot', label: 'Knot', color: '#b87ca0' },
-  { kind: 'capsule', label: 'Capsule', color: '#7cb88f' },
-  { kind: 'plane', label: 'Plate', color: '#9aa7bd' },
-  { kind: 'tetrahedron', label: 'Tetra', color: '#c0a062' },
-  { kind: 'icosahedron', label: 'Icosa', color: '#6294c0' },
-];
-
 export default function MeshyPanel() {
   const [prompt, setPrompt] = useState('a low-poly robot');
   const [style, setStyle] = useState('realistic');
@@ -141,15 +126,6 @@ export default function MeshyPanel() {
       {needsToken && <p className="status error">Add a free Hugging Face token in settings (top-right) first.</p>}
       {message && <p className={'status ' + status}>{message}</p>}
 
-      <div className="divider" />
-      <label className="lbl">Quick primitives</label>
-      <div className="row wrap" data-tut="add-shape">
-        {PRIMITIVES.map((p) => (
-          <button key={p.kind} className="btn" onClick={() => addMesh({ kind: p.kind, label: p.label, color: p.color, scale: DEFAULT_SHAPE_UNIT })}>
-            + {p.label}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

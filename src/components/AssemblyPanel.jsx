@@ -56,7 +56,7 @@ export default function AssemblyPanel() {
   const explode = useStore((s) => s.explode);
   const setExplode = useStore((s) => s.setExplode);
 
-  const tree = useMemo(() => assemblyTree(), [meshes, assemblies]); // eslint-disable-line
+  const tree = useMemo(() => assemblyTree(), [meshes, assemblies]);
   const byId = useMemo(() => Object.fromEntries(meshes.map((m) => [m.id, m])), [meshes]);
   const [selAsm, setSelAsm] = useState(ROOT);
   const [mass, setMass] = useState(null);
@@ -67,7 +67,7 @@ export default function AssemblyPanel() {
   const selIds = selectedMeshIds?.length ? selectedMeshIds : selectedMeshId ? [selectedMeshId] : [];
   const asmList = Object.values(assemblies);
 
-  useEffect(() => { let live = true; assemblyMass(selAsm).then((r) => live && setMass(r)); return () => { live = false; }; }, [selAsm, meshes, assemblies]); // eslint-disable-line
+  useEffect(() => { let live = true; assemblyMass(selAsm).then((r) => live && setMass(r)); return () => { live = false; }; }, [selAsm, meshes, assemblies]);
 
   async function checkInterference() {
     setBusy(true); setInterf(null);
@@ -84,7 +84,7 @@ export default function AssemblyPanel() {
 
   return (
     <div className="asm">
-      <label className="lbl">Assembly <span className="muted">— {meshes.length} bodies, {asmList.length} subassembl{asmList.length === 1 ? 'y' : 'ies'}</span></label>
+      <p className="muted small" style={{ margin: 0 }}>{meshes.length} bodies · {asmList.length} subassembl{asmList.length === 1 ? 'y' : 'ies'} · double-click a name to rename</p>
       <div className="asm-tree">
         <Node id={ROOT} tree={tree} depth={0} onSelect={setSelAsm} selectedAsm={selAsm} meshes={meshes} byId={byId} />
       </div>
@@ -122,10 +122,10 @@ export default function AssemblyPanel() {
       <label className="lbl">Exploded view — {explode.toFixed(2)}× <span className="muted">(display only; exports assembled)</span></label>
       <input type="range" min="0" max="3" step="0.05" value={explode} onChange={(e) => setExplode(e.target.value)} />
 
-      <div className="row" style={{ marginTop: 4 }}>
+      <div className="row" style={{ marginTop: 4, alignItems: 'center' }}>
         <button className="btn" disabled={busy || meshes.length < 2} onClick={checkInterference}>{busy ? '…' : 'Check interference'}</button>
-        <input type="number" step="0.1" min="0" value={clearance} onChange={(e) => setClearance(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
-        <span className="muted small">mm clearance</span>
+        <input type="number" step="0.1" min="0" value={clearance} onChange={(e) => setClearance(parseFloat(e.target.value) || 0)} style={{ width: 64 }} title="Minimum clearance between bodies" />
+        <span className="muted small" style={{ whiteSpace: 'nowrap' }}>mm gap</span>
       </div>
       {interf && (
         <div className={'asm-report ' + (interf.ok ? 'ok' : 'err')}>

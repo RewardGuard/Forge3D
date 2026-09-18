@@ -43,6 +43,11 @@ try {
 const PORT = Number(process.env.PORT) || 8787;
 const FREE_TOKENS = Number(process.env.FREE_TOKENS) || 5000;        // per month, free plan
 const PRO_TOKENS = Number(process.env.PRO_TOKENS) || 2_000_000;     // per month courtesy cap, pro plan
+const TRIAL_DAYS = Number(process.env.TRIAL_DAYS) || 7;
+const STORAGE_BYTES = Number(process.env.STORAGE_BYTES) || 500 * 1024 ** 3; // 500GB default grant
+const trialActive = (acct) => Boolean(acct?.trialStartedAt && Date.now() - acct.trialStartedAt < TRIAL_DAYS * 86400_000);
+const entitledOf = (acct) => acct?.plan === 'pro' || trialActive(acct); // pro OR live trial unlocks everything
+const estimate = (s) => Math.ceil(String(s || '').length / 4);
 const PRICE_USD = process.env.PRICE_USD || '5';
 
 // JWT secret: env, else generated once and persisted next to the code.
@@ -163,10 +168,6 @@ const billingConfigured = () => Boolean(STRIPE_KEY && STRIPE_PRICE);
 const storageBillingConfigured = () => Boolean(STRIPE_KEY && STRIPE_STORAGE_PRICE);
 
 // ---- trial + storage constants ----
-const TRIAL_DAYS = Number(process.env.TRIAL_DAYS) || 7;
-const STORAGE_BYTES = Number(process.env.STORAGE_BYTES) || 500 * 1024 ** 3; // 500GB default grant
-const trialActive = (acct) => Boolean(acct?.trialStartedAt && Date.now() - acct.trialStartedAt < TRIAL_DAYS * 86400_000);
-const entitledOf = (acct) => acct?.plan === 'pro' || trialActive(acct); // pro OR live trial unlocks everything
 
 // Look up an active promotion code by the text the user typed (e.g. "LAUNCH90").
 // Returns its Stripe id, or null if it doesn't exist / isn't active. Read-only.
@@ -213,7 +214,6 @@ function verifyStripeSig(rawBody, header) {
 function stripFences(t) {
   return String(t || '').replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
 }
-const estimate = (s) => Math.ceil(String(s || '').length / 4);
 
 // Optional Headroom compression: route a provider's upstream through a Headroom
 // proxy (github.com/RewardGuard/headroom) to cut input tokens 60–95%. Off by

@@ -7,6 +7,12 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { measureSTL } from './stlMeasure.mjs';
+import { createRequire } from 'node:module';
+// CommonJS module (shared with the Node test harness) — load it the CJS way
+const localAi = createRequire(import.meta.url)('./localAi.cjs');
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const PROXY_URL = process.env.FORGE3D_PROXY || 'https://forge3d.design/f3d-api';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV === 'development';
@@ -693,7 +699,6 @@ const GLM_MODEL = 'glm-4.5-flash'; // free tier model
 const HF_ROUTER_URL = 'https://router.huggingface.co/v1/chat/completions';
 const HF_VISION_MODEL = 'zai-org/GLM-4.5V';
 // Forge3D Cloud proxy — the "base model": keys live on our server, no user key.
-const PROXY_URL = process.env.FORGE3D_PROXY || 'https://forge3d.design/f3d-api';
 
 // Call the cloud proxy (server holds the key). Returns generated text.
 async function proxyGenerate({ system, userText, maxTokens = 2000, provider = null }) {
@@ -746,7 +751,6 @@ function stripFences(text) {
     .trim();
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Turn a raw HTTP status into a clear, human message. `detail` is the provider's
 // own error text (kept visible — it often explains the *real* cause, e.g. a

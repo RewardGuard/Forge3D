@@ -17,6 +17,8 @@ import EdgePicker from './EdgePicker.jsx';
 import { explodedOffsets } from '../lib/assembly.js';
 import CaptureFramer from './CaptureFramer.jsx';
 
+const round = (v) => Math.round(v * 1000) / 1000;
+
 // PBR hints derived from the mesh's assigned physical material (metal vs not).
 function pbrFor(mesh) {
   const mat = resolveMaterial(mesh);
@@ -87,7 +89,7 @@ function STLInner({ mesh, selected }) {
   const pbr = pbrFor(mesh);
   return (
     <mesh scale={[norm, norm, norm]} geometry={geo} castShadow receiveShadow>
-      <meshStandardMaterial color={mesh.color || '#9aa7bd'} emissive={selected ? '#3b82f6' : '#000'} emissiveIntensity={selected ? 0.35 : 0} metalness={pbr.metalness} roughness={pbr.roughness} envMapIntensity={0.9} />
+      <meshStandardMaterial color={mesh.color || '#9aa7bd'} emissive={selected ? (mesh.color || '#9aa7bd') : '#000'} emissiveIntensity={selected ? 0.22 : 0} metalness={pbr.metalness} roughness={pbr.roughness} envMapIntensity={0.9} />
     </mesh>
   );
 }
@@ -146,7 +148,6 @@ function CSGGroup({ members }) {
     } catch {
       return null; // degenerate geometry mid-drag — skip this frame's result
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [depKey]);
 
   // FALLBACK: if the boolean can't be computed (degenerate / re-cut edge case),
@@ -186,8 +187,8 @@ function CSGGroup({ members }) {
     >
       <meshStandardMaterial
         color={primary.color}
-        emissive={selected ? '#3b82f6' : '#000'}
-        emissiveIntensity={selected ? 0.35 : 0}
+        emissive={selected ? primary.color : '#000'}
+        emissiveIntensity={selected ? 0.22 : 0}
         metalness={pbr.metalness}
         roughness={pbr.roughness}
         envMapIntensity={0.9}
@@ -314,7 +315,7 @@ function MeshItem({ mesh, ghost = false }) {
             transparent
             opacity={selected ? 0.5 : 0.32}
             emissive={selected ? '#3b82f6' : '#000'}
-            emissiveIntensity={selected ? 0.3 : 0}
+            emissiveIntensity={selected ? 0.18 : 0}
             depthWrite={false}
           />
         ) : (
@@ -379,7 +380,6 @@ function MeshItem({ mesh, ghost = false }) {
   );
 }
 
-const round = (v) => Math.round(v * 1000) / 1000;
 
 export default function Viewport3D() {
   const meshes = useStore((s) => s.meshes);
@@ -392,7 +392,7 @@ export default function Viewport3D() {
   // the assembly structure changes. Positions in the store are untouched.
   const explode = useStore((s) => s.explode);
   const assemblies = useStore((s) => s.assemblies);
-  const explodeOffsets = React.useMemo(() => explodedOffsets(explode), [explode, assemblies, meshes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const explodeOffsets = React.useMemo(() => explodedOffsets(explode), [explode, assemblies, meshes]);
   const selectMesh = useStore((s) => s.selectMesh);
   const theme = useStore((s) => s.theme);
   const light = useStore((s) => s.lightLevel);
@@ -471,8 +471,10 @@ function ShadedMaterial({ color, selected, metalness, roughness, side }) {
   const shading = useStore((s) => s.viewport.shading);
   const common = {
     color, side,
-    emissive: selected ? '#3b82f6' : '#000',
-    emissiveIntensity: selected ? 0.4 : 0,
+    // selection brightens the body's own colour instead of tinting it blue,
+    // so a red part still reads as red while selected
+    emissive: selected ? color : '#000',
+    emissiveIntensity: selected ? 0.22 : 0,
   };
   if (shading === 'wireframe') return <meshBasicMaterial {...common} wireframe />;
   if (shading === 'xray') return <meshStandardMaterial {...common} transparent opacity={0.28} depthWrite={false} metalness={0} roughness={1} />;

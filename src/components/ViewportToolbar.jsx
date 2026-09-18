@@ -25,7 +25,7 @@ export default function ViewportToolbar() {
   const requestBookmark = useStore((s) => s.requestBookmark);
   const selected = useStore((s) => s.selectedMeshId);
   const meshCount = useStore((s) => s.meshes.length);
-  const [open, setOpen] = useState('views');
+  const [open, setOpen] = useState(null); // collapsed until asked — the viewport is the product
   const [bmName, setBmName] = useState('');
 
   const hiddenCount = vp.hiddenIds.length + (vp.isolatedIds ? meshCount - vp.isolatedIds.length : 0);

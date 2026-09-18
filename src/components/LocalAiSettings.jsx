@@ -35,7 +35,7 @@ export default function LocalAiSettings() {
       if (up && !d.servers.some((s) => s.up && s.url === localAiUrl)) await save({ localAiUrl: up.url, localAiModel: up.models[0] || '' });
     } finally { setBusy(false); }
   }
-  useEffect(() => { detect(); }, []); // eslint-disable-line
+  useEffect(() => { detect(); }, []);
 
   const live = servers?.find((s) => s.url === localAiUrl && s.up);
   const models = live?.models || [];

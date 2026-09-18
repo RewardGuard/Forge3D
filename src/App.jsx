@@ -29,7 +29,9 @@ const browserFallback = {
     setBridgeEnabled: async (bridgeEnabled) => ({ bridgeEnabled, running: false, port: 8765 }),
     setBridgeToken: async (bridgeToken) => ({ hasBridgeToken: Boolean(bridgeToken && bridgeToken !== '__generate__'), bridgeToken: bridgeToken === '__generate__' ? '' : (bridgeToken || '') }),
     setCloudPairing: async ({ enabled, url } = {}) => ({ cloudPairEnabled: Boolean(enabled), cloudPairUrl: url || '', hasCloudPairToken: false, running: false, status: 'off (browser preview)' }),
+    setLocalAi: async (patch = {}) => ({ aiMode: patch.aiMode || 'cloud', localAiUrl: patch.localAiUrl || 'http://localhost:1234/v1', localAiModel: patch.localAiModel || '' }),
   },
+  localAi: { discover: async () => ({ servers: [] }) },
   claude: {
     generate: async ({ prompt }) => ({
       mock: true,

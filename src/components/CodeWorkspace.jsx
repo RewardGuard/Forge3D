@@ -63,7 +63,6 @@ function Editor({ value, onChange, mode, theme }) {
     });
     view.current = new EditorView({ state, parent: host.current });
     return () => { view.current?.destroy(); view.current = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // external value change (switching files, AI generation) → replace doc
@@ -182,7 +181,7 @@ export default function CodeWorkspace() {
   const [sideOpen, setSideOpen] = useState(true);
   const netlist = useMemo(() => buildNetlist(nodes, wires), [nodes, wires]);
 
-  useEffect(() => { if (node && !codeByNode[node.id]) setNodeCode(node.id, STARTER[lang.target]); }, [node?.id]); // eslint-disable-line
+  useEffect(() => { if (node && !codeByNode[node.id]) setNodeCode(node.id, STARTER[lang.target]); }, [node?.id]);
 
   async function generate(mode) {
     if (!node || busy) return;

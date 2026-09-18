@@ -49,7 +49,7 @@ export default function EditorShell({ chromeless = false }) {
           ))}
         </nav>
         {!chromeless && (
-          <button className="mini" title="Back to your projects" onClick={() => setShellView('home')}>⌂ Home</button>
+          <button className="mini" title="Back to your projects" onClick={() => setShellView('home')}>⌂ <span className="btn-txt">Home</span></button>
         )}
         <ProjectButtons />
         <ThemeToggle />

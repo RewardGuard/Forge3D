@@ -54,7 +54,7 @@ export default function CopilotPanel() {
 
   return (
     <div className="cp">
-      <label className="lbl">Copilot <span className="muted">— ask for a change; nothing happens until you accept</span></label>
+      <p className="muted small" style={{ margin: 0 }}>Ask for a change in plain words. Nothing is applied until you accept the proposal.</p>
       <div className="row">
         <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') doPlan(); }}
           placeholder={meshCount ? 'e.g. make it 20% lighter, keep the mounting bosses' : 'Add a body first'} disabled={!meshCount} style={{ flex: 1 }} />

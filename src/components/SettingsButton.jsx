@@ -118,6 +118,7 @@ export default function SettingsButton() {
   const [thingiToken, setThingiToken] = useState('');
   const [keyInputs, setKeyInputs] = useState({}); // code-provider id -> typed key
   const [usage, setUsage] = useState(null);       // per-provider remaining credits
+  const [cloudUrlInput, setCloudUrlInput] = useState('');
 
   // refresh credit balances whenever the panel opens
   useEffect(() => {
@@ -145,7 +146,6 @@ export default function SettingsButton() {
   const hasCloudPairToken = useStore((s) => s.hasCloudPairToken);
   const cloudPairStatus = useStore((s) => s.cloudPairStatus);
   const setCloudPair = useStore((s) => s.setCloudPair);
-  const [cloudUrlInput, setCloudUrlInput] = useState('');
   const [cloudTokenInput, setCloudTokenInput] = useState('');
   const hasMeshyKey = useStore((s) => s.hasMeshyKey);
   const hasHfToken = useStore((s) => s.hasHfToken);
@@ -301,7 +301,7 @@ export default function SettingsButton() {
   return (
     <div className="settings">
       <button className={'pill' + (codeReady ? ' ok' : '')} onClick={() => setOpen(true)} title="Settings & API keys">
-        <span className="gear">⚙</span> Settings
+        <span className="gear">⚙</span> <span className="btn-txt">Settings</span>
         <span className={'pill-dot' + (codeReady ? ' ok' : '')} />
       </button>
 

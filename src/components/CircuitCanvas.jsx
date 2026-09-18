@@ -186,6 +186,7 @@ export default function CircuitCanvas() {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return { x: 0, y: 0 };
     const part = PART_BY_ID[node.partId];
+    if (!part) return { x: node.x, y: node.y };
     const idx = part.pins.indexOf(pin);
     return pinPosition(node, idx, part.pins.length);
   };
@@ -234,6 +235,20 @@ export default function CircuitCanvas() {
       {/* nodes */}
       {nodes.map((node) => {
         const part = PART_BY_ID[node.partId];
+        // A project can reference a part the catalog no longer has (renamed id,
+        // older file, MCP typo). Draw it as a stub the user can select and
+        // delete instead of taking the whole app down.
+        if (!part) {
+          const selected = selectedNodeId === node.id;
+          return (
+            <g key={node.id} transform={`translate(${node.x},${node.y})`}>
+              <rect className={'node-box' + (selected ? ' selected' : '')} width={NODE_W} height={46} rx="8"
+                stroke="var(--danger)" strokeDasharray="4 3" onMouseDown={(e) => onMouseDownNode(e, node)} style={{ cursor: 'grab' }} />
+              <text x="8" y="18" className="node-title">Unknown part</text>
+              <text x="8" y="34" className="pin-label">{String(node.partId)} — not in catalog</text>
+            </g>
+          );
+        }
         const h = nodeHeight(part);
         const leftCount = Math.ceil(part.pins.length / 2);
         const selected = selectedNodeId === node.id;
@@ -252,7 +267,12 @@ export default function CircuitCanvas() {
               style={{ cursor: 'grab' }}
             />
             <rect width={NODE_W} height="24" rx="8" fill={part.color} onMouseDown={(e) => onMouseDownNode(e, node)} />
-            <text x="8" y="16" className="node-title">{names[node.id] || part.name}</text>
+            {/* title is clipped so a long part name never runs into the price */}
+            <clipPath id={`title-${node.id}`}><rect x="0" y="0" width={NODE_W - 52} height="24" /></clipPath>
+            <text x="8" y="16" className="node-title" clipPath={`url(#title-${node.id})`}>
+              <title>{names[node.id] || part.name}</title>
+              {names[node.id] || part.name}
+            </text>
             <text x={NODE_W - 8} y="16" className="node-price" textAnchor="end">${part.price.toFixed(2)}</text>
 
             {/* clear floating "active" badge above the node: spinning / lit / sound / on */}
