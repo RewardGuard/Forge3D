@@ -28,7 +28,8 @@ const get = (p, token) => fetch(BASE + p, { headers: token ? { authorization: `B
 const server = spawn(process.execPath, [path.join(__dirname, 'index.mjs')], {
   env: {
     ...process.env, PORT: String(PORT), DB_PATH: path.join(tmp, 'db.json'),
-    JWT_SECRET: 'test-secret', MOCK_UPSTREAM: '1', MOCK_TOKENS: '2000',
+    JWT_SECRET: 'test-secret', MOCK_UPSTREAM: '1', MOCK_TOKENS: '2000', RATE_PER_MIN: '500',
+    MOCK_UPSTREAM_FAIL: 'glm:400:You have reached your specified API usage limits. You will regain access on 2026-10-01 at 00:00 UTC.',
     FREE_TOKENS: '5000', PRO_TOKENS: '2000000', GLM_KEY: 'x', ANTHROPIC_KEY: 'x',
     STRIPE_WEBHOOK_SECRET: WHSEC, STRIPE_SECRET_KEY: '', STRIPE_PRICE_ID: '',
   },
@@ -118,6 +119,16 @@ try {
   ok('health reports vision + textTo3d flags', typeof (await get('/health')).body.vision === 'boolean');
   ok('a FREE account can request Claude by name (no plan gate on provider)',
     (await post('/v1/chat', { system: 's', user: 'u', provider: 'claude' }, TT)).status !== 403);
+
+  console.log('UPSTREAM FAILURES ARE NAMED (the server key ran out of Anthropic quota on 2026-09-19)');
+  const TQ = (await post('/auth/signup', { email: 'quota@test.com', password: 'quotapass123' })).body.token;
+  const q = await post('/v1/chat', { system: 's', user: 'u __upstream_fail__', provider: 'glm' }, TQ);
+  ok('a provider out of quota → 503 provider_quota, naming the provider and the reset date',
+    q.status === 503 && q.body.code === 'provider_quota' && q.body.provider === 'glm' && q.body.resetsAt === '2026-10-01', JSON.stringify(q.body));
+  ok('…and the message tells the user what to do instead of quoting the developer console',
+    /out of quota/.test(q.body.error) && /Settings/.test(q.body.error) && !/specified API usage/.test(q.body.error), q.body.error);
+  const meQ = await get('/me', TQ);
+  ok('a failed call is not billed', meQ.body.usage.used === 0, JSON.stringify(meQ.body.usage));
 } finally {
   server.kill();
   fs.rmSync(tmp, { recursive: true, force: true });

@@ -27,7 +27,12 @@ function configPath() {
 }
 function readConfig() {
   try {
-    return JSON.parse(fs.readFileSync(configPath(), 'utf-8'));
+    const cfg = JSON.parse(fs.readFileSync(configPath(), 'utf-8'));
+    // 'glm' was the old default for the cloud model, written before the user
+    // ever saw the picker. Claude is the default now; a value the user picked
+    // themselves (through the picker) carries cloudAiChosen and is kept.
+    if (cfg.cloudAi === 'glm' && !cfg.cloudAiChosen) { cfg.cloudAi = 'claude'; fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2)); }
+    return cfg;
   } catch {
     return {};
   }
@@ -393,6 +398,7 @@ ipcMain.handle('device:fingerprint', () => ({ deviceId: deviceFingerprint() }));
 ipcMain.handle('config:setCloudAi', (_e, cloudAi) => {
   const cfg = readConfig();
   cfg.cloudAi = String(cloudAi || 'claude');
+  cfg.cloudAiChosen = true;
   writeConfig(cfg);
   return { cloudAi: cfg.cloudAi };
 });
@@ -706,11 +712,21 @@ async function proxyGenerate({ system, userText, maxTokens = 2000, provider = nu
   if (!cfg.accountToken) {
     throw new Error('F3D Cloud needs a free account: open Settings → F3D Cloud Account to sign up (5,000 free tokens/month), or enter your own API key.');
   }
-  const res = await fetch(`${PROXY_URL}/v1/chat`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.accountToken}` },
-    body: JSON.stringify({ system, user: userText, maxTokens, provider: provider || cfg.cloudAi || 'claude' }),
-  });
+  const which = provider || cfg.cloudAi || 'claude';
+  let res;
+  try {
+    res = await fetch(`${PROXY_URL}/v1/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.accountToken}` },
+      body: JSON.stringify({ system, user: userText, maxTokens, provider: which }),
+      // the server gives a model 120 s; a little more here so ITS message wins,
+      // but never an open-ended wait behind "Sending…"
+      signal: AbortSignal.timeout(150_000),
+    });
+  } catch (e) {
+    if (e?.name === 'TimeoutError') throw new Error(`Forge3D Cloud (${which}) did not answer within 150 s. Try again, or pick Claude in Settings → F3D Cloud Account → Cloud AI.`);
+    throw new Error(`Forge3D Cloud unreachable: ${e?.message || e}`);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `Forge3D Cloud error ${res.status}`);
   return data.text || '';

@@ -71,6 +71,8 @@ const PROVIDERS = [
   { id: 'openrouter', env: 'OPENROUTER_KEY', kind: 'openai', url: 'https://openrouter.ai/api/v1/chat/completions', model: 'meta-llama/llama-3.3-70b-instruct:free', extra: { 'HTTP-Referer': 'https://forge3d.app', 'X-Title': 'Forge3D' } },
 ];
 const available = () => PROVIDERS.filter((p) => process.env[p.env]);
+// Output ceiling per call. 4,000 truncated a 6,000-token circuit build mid-JSON.
+const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS) || 8192;
 
 // ---- Hugging Face, server-held ----
 // Vision (Orchestra's "look") and text-to-3D used to need the user's own HF
@@ -121,10 +123,10 @@ function release(email, tokens) {
   const left = reservedOf(email) - Math.max(0, tokens);
   if (left > 0) inflight.set(email, left); else inflight.delete(email);
 }
-// worst case a single call can cost: the provider clamps max_tokens to 4000,
-// and the prompt itself is billed too, so estimate both sides.
+// worst case a single call can cost: the provider clamps max_tokens to
+// MAX_OUTPUT_TOKENS, and the prompt itself is billed too, so estimate both sides.
 const worstCase = (body) =>
-  Math.min(Number(body?.maxTokens) || 2000, 4000) + estimate(body?.system) + estimate(body?.user);
+  Math.min(Number(body?.maxTokens) || 2000, MAX_OUTPUT_TOKENS) + estimate(body?.system) + estimate(body?.user);
 
 // ---- passwords (scrypt) + JWT (HS256, no deps) ----
 const b64u = (buf) => Buffer.from(buf).toString('base64url');
@@ -223,13 +225,45 @@ const upstreamFor = (p, fallback) => process.env['HEADROOM_URL_' + p.id.toUpperC
 // fetch the upstream, but if it's a Headroom override and Headroom is unreachable
 // (connection error, not an HTTP error), retry once DIRECT — so a compression
 // proxy that goes down can never take the live free tier with it.
+// Hard ceiling on one model call. The desktop app shows "Sending…" until this
+// returns; without a ceiling a slow model (GLM once took 147 s on a circuit)
+// left the user staring at that message with no idea if anything was alive.
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS) || 120_000;
 async function upstreamFetch(url, direct, opts) {
-  try { return await fetch(url, opts); }
-  catch (e) { if (url !== direct) { console.warn(`[headroom] ${url} unreachable (${e?.message}); falling back direct`); return fetch(direct, opts); } throw e; }
+  const withTimeout = { ...opts, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) };
+  try { return await fetch(url, withTimeout); }
+  catch (e) {
+    if (e?.name === 'TimeoutError') throw new Error(`The model did not answer within ${Math.round(UPSTREAM_TIMEOUT_MS / 1000)} s. Try again, or pick a faster cloud model (Claude) in Settings → account card.`);
+    if (url !== direct) { console.warn(`[headroom] ${url} unreachable (${e?.message}); falling back direct`); return fetch(direct, withTimeout); }
+    throw e;
+  }
+}
+
+// An upstream refusal, named. "You have reached your specified API usage
+// limits" from Anthropic means the SERVER's key hit its monthly spend cap —
+// the user can do nothing about it from the app except pick another model,
+// so say exactly that instead of relaying a sentence written for a developer.
+function upstreamError(p, status, message) {
+  const msg = String(message || '');
+  const quota = status === 429 || /usage limits|spend limit|quota|insufficient.*(credit|balance)|billing/i.test(msg);
+  const resets = msg.match(/regain access on ([0-9]{4}-[0-9]{2}-[0-9]{2})/)?.[1];
+  const err = new Error(quota
+    ? `${p.id} is out of quota on Forge3D Cloud${resets ? ` until ${resets}` : ''}. Pick another cloud model (Settings → F3D Cloud Account → Cloud AI: GLM, Groq, Gemini…) or use your own API key.`
+    : `${p.id}: ${msg}`);
+  err.status = quota ? 503 : 502;
+  err.code = quota ? 'provider_quota' : 'provider_error';
+  err.provider = p.id;
+  if (resets) err.resetsAt = resets;
+  return err;
 }
 
 async function callProvider(p, { system, user, maxTokens }) {
   if (process.env.MOCK_UPSTREAM === '1') { // local test mode — no real AI spend
+    // MOCK_UPSTREAM_FAIL="claude:429:You have reached your specified API usage limits…"
+    // + a prompt containing __upstream_fail__ lets the suite exercise the
+    // failure path without a real provider.
+    const [failId, failStatus, ...failMsg] = String(process.env.MOCK_UPSTREAM_FAIL || '').split(':');
+    if (failId && failId === p.id && /__upstream_fail__/.test(String(user))) throw upstreamError(p, Number(failStatus) || 500, failMsg.join(':'));
     return { text: `mock(${p.id})@${upstreamFor(p, 'direct')}: ok`, tokens: Number(process.env.MOCK_TOKENS) || 2000 };
   }
   if (p.kind === 'anthropic') {
@@ -238,12 +272,12 @@ async function callProvider(p, { system, user, maxTokens }) {
       method: 'POST',
       headers: { 'x-api-key': process.env[p.env], 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: p.model, max_tokens: Math.min(Number(maxTokens) || 2000, 4000),
+        model: p.model, max_tokens: Math.min(Number(maxTokens) || 2000, MAX_OUTPUT_TOKENS),
         system: system || undefined, messages: [{ role: 'user', content: String(user || '') }],
       }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error?.message || `claude error ${res.status}`);
+    if (!res.ok) throw upstreamError(p, res.status, data?.error?.message || `claude error ${res.status}`);
     const text = stripFences((data.content || []).map((c) => c.text || '').join(''));
     const tokens = (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0) || estimate(system) + estimate(user) + estimate(text);
     return { text, tokens };
@@ -253,12 +287,15 @@ async function callProvider(p, { system, user, maxTokens }) {
     method: 'POST',
     headers: { authorization: `Bearer ${process.env[p.env]}`, 'content-type': 'application/json', ...(p.extra || {}) },
     body: JSON.stringify({
-      model: p.model, max_tokens: Math.min(Number(maxTokens) || 2000, 4000), temperature: 0.4,
+      model: p.model, max_tokens: Math.min(Number(maxTokens) || 2000, MAX_OUTPUT_TOKENS), temperature: 0.4,
       messages: [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: String(user || '') }],
+      // GLM-4.5 "thinks" by default: minutes of hidden reasoning billed as
+      // output tokens (7,972 for one circuit). Forge3D asks for JSON, not essays.
+      ...(p.id === 'glm' ? { thinking: { type: 'disabled' } } : {}),
     }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error?.message || `${p.id} error ${res.status}`);
+  if (!res.ok) throw upstreamError(p, res.status, data?.error?.message || `${p.id} error ${res.status}`);
   const text = stripFences(data.choices?.[0]?.message?.content);
   const tokens = (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0) || estimate(system) + estimate(user) + estimate(text);
   return { text, tokens };
@@ -564,7 +601,7 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 404, { error: 'not found' });
   } catch (e) {
-    return send(res, 500, { error: String(e?.message || e) });
+    return send(res, e?.status || 500, { error: String(e?.message || e), ...(e?.code ? { code: e.code } : {}), ...(e?.provider ? { provider: e.provider } : {}), ...(e?.resetsAt ? { resetsAt: e.resetsAt } : {}) });
   }
 });
 

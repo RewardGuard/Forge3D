@@ -1,13 +1,16 @@
 import React, { useRef, useMemo, useEffect, useState, Suspense } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Physics, RigidBody, CuboidCollider } from '@react-three/rapier';
+import { Physics, RigidBody, CuboidCollider, TrimeshCollider } from '@react-three/rapier';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment, ContactShadows, Html } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { useStore } from '../lib/store.js';
 import { initLifeState, stepLifeState, glowColor, tempColor, HAZARDS, resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr } from '../lib/scaleUtil.js';
+import MeshGeometry from './MeshGeometry.jsx';
+import { geometryScale } from '../lib/geometryFactory.js';
+import { needsTrimesh, trimeshArgs } from '../lib/physicsShape.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 import { simulate } from '../lib/simulate.js';
 import CaptureFramer from './CaptureFramer.jsx';
@@ -69,23 +72,8 @@ function BakedGeom({ mesh }) {
   return <primitive object={geo} attach="geometry" />;
 }
 
-function geometryFor(mesh) {
-  if (mesh.kind === 'baked') return <BakedGeom mesh={mesh} />;
-  switch (mesh.kind) {
-    case 'sphere': return <sphereGeometry args={[0.5, 32, 32]} />;
-    case 'cylinder': return <cylinderGeometry args={[0.4, 0.4, 1, 48]} />;
-    case 'cone': return <coneGeometry args={[0.5, 1, 48]} />;
-    case 'pyramid': return <coneGeometry args={[0.6, 1, 4]} />;
-    case 'torus': return <torusGeometry args={[0.4, 0.16, 24, 64]} />;
-    case 'torusknot': return <torusKnotGeometry args={[0.34, 0.12, 128, 24]} />;
-    case 'plane': return <boxGeometry args={[1, 0.02, 1]} />;
-    case 'capsule': return <capsuleGeometry args={[0.3, 0.6, 8, 24]} />;
-    case 'tetrahedron': return <tetrahedronGeometry args={[0.6]} />;
-    case 'icosahedron': return <icosahedronGeometry args={[0.6]} />;
-    case 'part': return <boxGeometry args={mesh.size || [0.1, 0.1, 0.1]} />;
-    default: return <boxGeometry args={[1, 1, 1]} />;
-  }
-}
+// one geometry path for every viewport (kernel features + corner radii included)
+const geometryFor = (mesh) => <MeshGeometry mesh={mesh} />;
 
 const FLAME_N = 5;
 const SMOKE_N = 6;
@@ -99,6 +87,7 @@ const INPUT_KINDS = new Set(['push-button', 'toggle-switch', 'potentiometer', 'j
 // stack, tumble and roll down slopes for real. This replaces the old
 // hand-rolled vertical-raycast gravity (which had no collision response).
 function collidersForUnit(unit) {
+  if (unit.members.some(needsTrimesh)) return false;   // explicit trimeshes below
   const kinds = unit.members.map((m) => m.kind);
   if (kinds.every((k) => k === 'sphere')) return 'ball';
   if (kinds.every((k) => k === 'box' || k === 'plane')) return 'cuboid';
@@ -211,7 +200,7 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }
       if (list.length) matsRef.current = list;
     }
 
-    const [bx, by, bz] = scaleArr(mesh.scale);
+    const [bx, by, bz] = geometryScale(mesh, scaleArr); // baked geometry is already true size
     const k = 0.3 + 0.7 * s.integrity;
     const melt = s.melt || 0;
     // melt: flatten + spread (slump)
@@ -292,7 +281,7 @@ function SimMesh({ mesh, spinning, spinDir = 1, stateRef, materialKey, running }
       rotation={mesh.rotation || [0, 0, 0]}
       {...inputHandlers}
     >
-      <group ref={bodyRef} scale={scaleArr(mesh.scale)}>
+      <group ref={bodyRef} scale={geometryScale(mesh, scaleArr)}>
         {isModel && loadedModel ? <primitive object={loadedModel} /> : fallbackBody}
       </group>
 
@@ -533,7 +522,7 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
       <ContactShadows position={[0, 0.001, 0]} opacity={theme === 'light' ? 0.35 : 0.55} scale={14} blur={2.4} far={6} resolution={1024} />
 
       <Suspense fallback={null}>
-        <Physics key={resetSignal || 0} paused={!running}>
+        <Physics key={resetSignal || 0} paused={!running} debug={Boolean(import.meta.env?.DEV && globalThis.__physDebug)}>
           {/* the floor: a fixed slab whose top surface is exactly y = 0 */}
           <RigidBody type="fixed" colliders={false}>
             <CuboidCollider args={[60, 0.5, 60]} position={[0, -0.5, 0]} />
@@ -563,6 +552,10 @@ export default function LifeSimView({ running, hazards, theme, onReport, resetSi
               {u.members.filter(isLoadedModelMesh).map((m) => (
                 <CuboidCollider key={'mc' + m.id} args={modelColliderArgs(m)} position={m.position} rotation={m.rotation || [0, 0, 0]} />
               ))}
+              {u.members.some(needsTrimesh) && u.members.filter((m) => !m.negative && !isLoadedModelMesh(m)).map((m) => {
+                const t = trimeshArgs(m);
+                return <TrimeshCollider key={'tm' + m.id} args={[t.vertices, t.indices]} mass={t.mass} />;
+              })}
             </RigidBody>
           ))}
         </Physics>

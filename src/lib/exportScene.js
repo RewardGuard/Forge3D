@@ -8,6 +8,9 @@ import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { resolveMaterial } from './lifesim.js';
+import { makeGeometry, geometryScale, hasFeatureGeom } from './geometryFactory.js';
+import { hasBakedScale } from './rounding.js';
+import { scaleArr } from './scaleUtil.js';
 
 const QUALITY = {
   low:    { seg: 12, ring: 32 },
@@ -16,6 +19,10 @@ const QUALITY = {
 };
 
 function primitiveGeometry(mesh, q) {
+  // A body with kernel features (fillet/chamfer/shell) or a corner radius
+  // already has its final geometry at true size — export THAT, not the bare
+  // primitive underneath, or the printed part loses every feature.
+  if (hasFeatureGeom(mesh) || hasBakedScale(mesh)) return makeGeometry(mesh);
   const s = q.seg;
   switch (mesh.kind) {
     case 'sphere': return new THREE.SphereGeometry(0.5, s, s);
@@ -88,11 +95,10 @@ function loadGLB(url) {
 function applyTransform(obj, mesh) {
   const p = mesh.position || [0, 0, 0];
   const r = mesh.rotation || [0, 0, 0];
-  const sc = mesh.scale ?? 1;
+  const sc = geometryScale(mesh, scaleArr); // [1,1,1] when the geometry is baked at true size
   obj.position.set(p[0], p[1], p[2]);
   obj.rotation.set(r[0], r[1], r[2]);
-  if (Array.isArray(sc)) obj.scale.multiply(new THREE.Vector3(sc[0], sc[1], sc[2]));
-  else obj.scale.multiplyScalar(sc);
+  obj.scale.multiply(new THREE.Vector3(sc[0], sc[1], sc[2]));
   obj.name = mesh.label || mesh.kind || mesh.id;
 }
 

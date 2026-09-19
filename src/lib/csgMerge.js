@@ -3,7 +3,7 @@
 // result behaves like any other mesh — select, transform, cut again, export.
 import * as THREE from 'three';
 import { Evaluator, Brush, ADDITION, SUBTRACTION } from 'three-bvh-csg';
-import { makeGeometry, prepareBrushGeometry } from './geometryFactory.js';
+import { makeGeometry, prepareBrushGeometry, geometryScale } from './geometryFactory.js';
 import { scaleArr } from './scaleUtil.js';
 
 const canMerge = (m) => !((m.kind === 'meshy' || m.kind === 'stl') && m.modelUrl);
@@ -16,7 +16,7 @@ export function mergeMembersToBaked(members) {
     const mat = new THREE.Matrix4().compose(
       new THREE.Vector3(...m.position),
       new THREE.Quaternion().setFromEuler(new THREE.Euler(...(m.rotation || [0, 0, 0]))),
-      new THREE.Vector3(...scaleArr(m.scale)),
+      new THREE.Vector3(...geometryScale(m, scaleArr)), // baked geometry is already true size
     );
     g.applyMatrix4(mat); // bake world transform
     return new Brush(g);

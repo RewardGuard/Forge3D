@@ -19,6 +19,7 @@
 
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import { SCENE_SCALE } from '../data/parts.js';
 
 const MM = SCENE_SCALE / 1000;              // scene units per mm
@@ -124,17 +125,37 @@ export function validateCornerRadius(mesh, radiusMm) {
   };
 }
 
+/**
+ * A box with every edge chamfered by distance r — the exact polyhedron, not
+ * RoundedBoxGeometry with one segment (that puts its only vertex at the 45°
+ * arc midpoint and tilts the flat faces, which is neither a chamfer nor a
+ * fillet). With equal chamfers the three strips at a corner meet at the
+ * point (W−r/2, H−r/2, D−r/2); each face keeps a rectangle inset by r.
+ */
+export function chamferedBoxGeometry(w, h, d, r) {
+  const W = w / 2, H = h / 2, D = d / 2;
+  const pts = [];
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+    pts.push(new THREE.Vector3(sx * W, sy * (H - r), sz * (D - r)));         // ±X face corners
+    pts.push(new THREE.Vector3(sx * (W - r), sy * H, sz * (D - r)));         // ±Y face corners
+    pts.push(new THREE.Vector3(sx * (W - r), sy * (H - r), sz * D));         // ±Z face corners
+    pts.push(new THREE.Vector3(sx * (W - r / 2), sy * (H - r / 2), sz * (D - r / 2))); // where 3 strips meet
+  }
+  return new ConvexGeometry(pts);
+}
+
 /** A box with real rounded (or chamfered) edges, built at true size. */
 export function roundedBoxGeometry(mesh) {
   const [w, h, d] = trueDimsMm(mesh).map(toSceneUnits);
   const style = CORNER_STYLES[mesh.cornerStyle] || CORNER_STYLES.round;
   const rMm = Math.min(Number(mesh.cornerRadius_mm) || 0, maxCornerRadiusMm(mesh));
   const r = toSceneUnits(rMm);
-  const seg = Number(mesh.cornerSegments) || style.segments;
   // RoundedBoxGeometry refuses a radius of exactly half the smallest side;
   // pull back by a hair so the limit case still builds.
-  const safe = Math.min(r, Math.min(w, h, d) / 2 - 1e-6);
-  return new RoundedBoxGeometry(w, h, d, Math.max(1, seg), Math.max(safe, 1e-6));
+  const safe = Math.max(Math.min(r, Math.min(w, h, d) / 2 - 1e-6), 1e-6);
+  if (style.id === 'chamfer') return chamferedBoxGeometry(w, h, d, safe);
+  const seg = Number(mesh.cornerSegments) || style.segments;
+  return new RoundedBoxGeometry(w, h, d, Math.max(2, seg), safe);
 }
 
 /**

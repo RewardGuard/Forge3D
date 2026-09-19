@@ -12,6 +12,7 @@ import { useStore } from '../lib/store.js';
 import { resolveMaterial } from '../lib/lifesim.js';
 import { scaleArr, packScale } from '../lib/scaleUtil.js';
 import { makeGeometry, bakedGeometry, prepareBrushGeometry, geometryScale, hasFeatureGeom } from '../lib/geometryFactory.js';
+import MeshGeometry from './MeshGeometry.jsx';
 import ScreenFace from './ScreenFace.jsx';
 import EdgePicker from './EdgePicker.jsx';
 import { explodedOffsets } from '../lib/assembly.js';
@@ -34,24 +35,8 @@ function BakedGeometry({ mesh }) {
 }
 
 // ---- primitive geometry for a given mesh kind ----
-function PrimitiveGeometry({ mesh }) {
-  if (mesh.kind === 'baked') return <BakedGeometry mesh={mesh} />;
-  if (hasFeatureGeom(mesh)) return <BakedGeometry mesh={{ geom: mesh.featureGeom }} />;
-  switch (mesh.kind) {
-    case 'sphere': return <sphereGeometry args={[0.5, 32, 32]} />;
-    case 'cylinder': return <cylinderGeometry args={[0.4, 0.4, 1, 48]} />;
-    case 'cone': return <coneGeometry args={[0.5, 1, 48]} />;
-    case 'pyramid': return <coneGeometry args={[0.6, 1, 4]} />;
-    case 'torus': return <torusGeometry args={[0.4, 0.16, 24, 64]} />;
-    case 'torusknot': return <torusKnotGeometry args={[0.34, 0.12, 128, 24]} />;
-    case 'plane': return <boxGeometry args={[1, 0.02, 1]} />;
-    case 'capsule': return <capsuleGeometry args={[0.3, 0.6, 8, 24]} />;
-    case 'tetrahedron': return <tetrahedronGeometry args={[0.6]} />;
-    case 'icosahedron': return <icosahedronGeometry args={[0.6]} />;
-    case 'part': return <boxGeometry args={mesh.size || [0.1, 0.1, 0.1]} />;
-    default: return <boxGeometry args={[1, 1, 1]} />;
-  }
-}
+// see MeshGeometry.jsx — one geometry path for every viewport
+const PrimitiveGeometry = MeshGeometry;
 
 // Loads a remote GLB (e.g. from Meshy) — centered and normalized to ~1 unit so
 // the parent group's `scale` controls real size consistently with primitives.
@@ -118,7 +103,8 @@ function CSGGroup({ members }) {
   const selectedIds = useStore((s) => s.selectedMeshIds);
   const primary = members.find((m) => !m.negative && csgable(m));
 
-  const depKey = JSON.stringify(members.map((m) => [m.id, m.kind, m.position, m.rotation, m.scale, m.negative, m.size, m.geom ? m.geom.positions.length : 0]));
+  const depKey = JSON.stringify(members.map((m) => [m.id, m.kind, m.position, m.rotation, m.scale, m.negative, m.size, m.geom ? m.geom.positions.length : 0,
+    m.cornerRadius_mm, m.cornerStyle, m.cornerSegments, m.featureGeom ? m.featureGeom.positions.length : 0, (m.features || []).map((f) => [f.type, f.enabled, f.params])]));
   const geometry = useMemo(() => {
     const ev = new Evaluator();
     ev.attributes = ['position', 'normal']; // must match prepareBrushGeometry
@@ -127,7 +113,7 @@ function CSGGroup({ members }) {
       const mat = new THREE.Matrix4().compose(
         new THREE.Vector3(...m.position),
         new THREE.Quaternion().setFromEuler(new THREE.Euler(...(m.rotation || [0, 0, 0]))),
-        new THREE.Vector3(...scaleArr(m.scale)),
+        new THREE.Vector3(...geometryScale(m, scaleArr)), // baked geometry is already true size
       );
       g.applyMatrix4(mat); // bake world transform so the result lives at origin
       return new Brush(g);

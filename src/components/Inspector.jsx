@@ -189,19 +189,24 @@ export default function Inspector() {
                       key={st.id}
                       className={'seg-btn' + ((mesh.cornerStyle || 'round') === st.id ? ' on' : '')}
                       title={st.detail}
-                      onClick={() => updateMesh(mesh.id, { cornerStyle: st.id })}
+                      onClick={() => updateMesh(mesh.id, { cornerStyle: st.id, cornerSegments: st.segments })}
                     >{st.label}</button>
                   ))}
                 </div>
-                <label className="lbl">
-                  Arc segments — {mesh.cornerSegments || CORNER_STYLES[mesh.cornerStyle || 'round'].segments}
-                  <span className="muted"> (higher = smoother, heavier to export)</span>
-                </label>
-                <input
-                  type="range" min="1" max="16" step="1"
-                  value={mesh.cornerSegments || CORNER_STYLES[mesh.cornerStyle || 'round'].segments}
-                  onChange={(e) => updateMesh(mesh.id, { cornerSegments: parseInt(e.target.value, 10) })}
-                />
+                {/* a chamfer is one facet by definition — only an arc has segments */}
+                {(mesh.cornerStyle || 'round') === 'round' && (
+                  <>
+                    <label className="lbl">
+                      Arc segments — {mesh.cornerSegments || CORNER_STYLES.round.segments}
+                      <span className="muted"> (higher = smoother, heavier to export)</span>
+                    </label>
+                    <input
+                      type="range" min="2" max="16" step="1"
+                      value={mesh.cornerSegments || CORNER_STYLES.round.segments}
+                      onChange={(e) => updateMesh(mesh.id, { cornerSegments: parseInt(e.target.value, 10) })}
+                    />
+                  </>
+                )}
                 <p className="muted small">
                   Body is {dims.map((d) => d.toFixed(1)).join(' × ')} mm. The radius is baked into the
                   geometry at true size, so it stays circular on every axis even when the body is stretched.

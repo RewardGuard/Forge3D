@@ -260,6 +260,15 @@ export default function CodePanel() {
 
   const busy = status === 'running';
   const agentBusy = agentStatus === 'running';
+  // a live clock next to "Sending…" — a slow model must never look like a
+  // dead button (a GLM circuit build once took 147 s)
+  const [agentSecs, setAgentSecs] = useState(0);
+  useEffect(() => {
+    if (!agentBusy) { setAgentSecs(0); return; }
+    const t0 = Date.now();
+    const id = setInterval(() => setAgentSecs(Math.round((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [agentBusy]);
 
   return (
     <div className="panel scroll">
@@ -286,7 +295,7 @@ export default function CodePanel() {
       <button className="btn primary full" disabled={agentBusy || !nodes.length} onClick={debugCircuit}>
         {agentBusy ? 'Analyzing…' : '⚙ Debug circuit with agent'}
       </button>
-      {agentMsg && <p className={'status ' + (agentBusy ? 'running' : agentStatus)}>{agentMsg}</p>}
+      {agentMsg && <p className={'status ' + (agentBusy ? 'running' : agentStatus)}>{agentMsg}{agentBusy && agentSecs > 0 ? ` ${agentSecs}s` : ''}{agentBusy && agentSecs >= 30 ? ' — still working; large circuits can take a minute or two' : ''}</p>}
 
       {/* ---- proposed changes (need permission to apply) ---- */}
       {proposal && (

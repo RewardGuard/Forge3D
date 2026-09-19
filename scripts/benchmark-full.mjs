@@ -28,6 +28,11 @@ import * as THREE from 'three';
 import * as CP from '../src/lib/copilot.js';
 import { availableModels, modelRoute } from '../src/lib/orchestra.js';
 import * as K from '../src/lib/constraints.js';
+import { makeGeometry, geometryScale } from '../src/lib/geometryFactory.js';
+import { exportSceneToStl } from '../src/lib/exportScene.js';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { mergeMembersToBaked } from '../src/lib/csgMerge.js';
+import { needsTrimesh, trimeshArgs, trimeshContains } from '../src/lib/physicsShape.js';
 
 import { useStore } from '../src/lib/store.js';
 import { simulate, netRole } from '../src/lib/simulate.js';
@@ -1589,6 +1594,62 @@ check('with nothing fixed the first body is grounded and the report says so', ()
   assert.equal(r.poses.A, undefined, 'the grounded body never moves');
   const [rx, , rz] = r.poses.B.rotation;
   assert.ok(Math.abs(rx) < 1e-4 && Math.abs(rz) < 1e-4, 'the lid is levelled onto the base (its yaw is a free DOF): ' + r.poses.B.rotation);
+});
+
+section('23. ONE GEOMETRY PATH — a rounded body is the same solid in the viewport, the merge and the STL');
+
+const bboxOf = (geo) => { geo.computeBoundingBox(); const b = geo.boundingBox; return [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z].map((v) => +v.toFixed(4)); };
+const bracket = { id: 'rb', kind: 'box', label: 'Bracket', position: [0, 0.5, 0], rotation: [0, 0, 0], scale: [2.4, 0.5, 1.2], cornerRadius_mm: 8 };
+
+check('a corner radius bakes the TRUE size — geometry is 2.4×0.5×1.2 and the renderer must not scale it again', () => {
+  assert.deepEqual(bboxOf(makeGeometry(bracket)), [2.4, 0.5, 1.2], 'the viewport used to draw this as a unit cube');
+  assert.deepEqual(geometryScale(bracket, scaleArr), [1, 1, 1]);
+  assert.deepEqual(geometryScale({ ...bracket, cornerRadius_mm: 0 }, scaleArr), [2.4, 0.5, 1.2], 'a sharp box is still a unit primitive scaled by the parent');
+});
+
+check('Corner type changes the solid: chamfer is one facet, round is an arc', () => {
+  const round = makeGeometry({ ...bracket, cornerStyle: 'round', cornerSegments: 6 });
+  const chamfer = makeGeometry({ ...bracket, cornerStyle: 'chamfer', cornerSegments: 1 });
+  assert.deepEqual(bboxOf(chamfer), [2.4, 0.5, 1.2], 'same envelope');
+  assert.ok(chamfer.attributes.position.count < round.attributes.position.count, 'a single facet needs far fewer vertices than a 6-segment arc');
+  // Along the top-front edge an arc bulges past the 45° chord a chamfer cuts:
+  // the arc's mid vertex has y+z = H+D-0.586r, the chamfer's corners only H+D-r.
+  const r = RD.toSceneUnits(8), H = 0.25, D = 0.6;
+  const maxYZ = (geo) => { const a = geo.attributes.position; let m = -Infinity; for (let i = 0; i < a.count; i++) { if (a.getY(i) > 0 && a.getZ(i) > 0) m = Math.max(m, a.getY(i) + a.getZ(i)); } return m; };
+  assert.ok(Math.abs(maxYZ(chamfer) - (H + D - r)) < 1e-3, 'chamfer = straight cut r in from both faces: ' + maxYZ(chamfer));
+  assert.ok(maxYZ(round) > H + D - 0.7 * r, 'round arc bulges past the chord: ' + maxYZ(round));
+});
+
+check('STL export of a rounded body keeps its size and its rounding (the print used to lose both)', async () => {
+  const parse = async (m) => { const b64 = await exportSceneToStl([m], 'medium'); const bytes = Buffer.from(b64, 'base64'); const g = new STLLoader().parse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)); return { size: bboxOf(g), tris: g.attributes.position.count / 3 }; };
+  const rounded = await parse(bracket);
+  const sharp = await parse({ ...bracket, cornerRadius_mm: 0 });
+  assert.deepEqual(rounded.size, [2.4, 0.5, 1.2], 'not double-scaled: ' + rounded.size);
+  assert.deepEqual(sharp.size, [2.4, 0.5, 1.2]);
+  assert.ok(rounded.tris > sharp.tris * 10, `rounded STL must carry the arcs (${rounded.tris} vs ${sharp.tris} triangles)`);
+});
+
+section('24. LIFE SIM COLLISION — a merged tray has no invisible ceiling');
+
+check('four walls + a floor merged into one body collide as a TRAY: the cavity is empty, the walls are solid', () => {
+  const W = 2.0, D = 1.4, H = 0.8, T = 0.1;
+  const walls = [
+    { id: 'f', kind: 'box', position: [0, T / 2, 0], scale: [W, T, D], groupId: 'g' },
+    { id: 'l', kind: 'box', position: [-(W / 2 - T / 2), H / 2, 0], scale: [T, H, D], groupId: 'g' },
+    { id: 'r', kind: 'box', position: [(W / 2 - T / 2), H / 2, 0], scale: [T, H, D], groupId: 'g' },
+    { id: 'a', kind: 'box', position: [0, H / 2, (D / 2 - T / 2)], scale: [W, H, T], groupId: 'g' },
+    { id: 'b', kind: 'box', position: [0, H / 2, -(D / 2 - T / 2)], scale: [W, H, T], groupId: 'g' },
+  ].map((m) => ({ ...m, rotation: [0, 0, 0], color: '#888' }));
+  const baked = mergeMembersToBaked(walls);
+  const tray = { id: 't', kind: 'baked', geom: baked.geom, halfY: baked.halfY, position: baked.center, rotation: [0, 0, 0], scale: 1 };
+  assert.ok(needsTrimesh(tray), 'a merged body must not get a convex hull');
+  assert.ok(!needsTrimesh(walls[0]), 'a plain box keeps its cuboid');
+  const shape = trimeshArgs(tray);
+  assert.ok(shape.indices.length >= 3 * 12 && shape.mass > 0);
+  assert.equal(trimeshContains(shape, [0, 0.5, 0]), false, 'the middle of the cavity is EMPTY — a dropped part must fall in');
+  assert.equal(trimeshContains(shape, [-(W / 2 - T / 2), 0.5, 0]), true, 'the left wall is solid');
+  assert.equal(trimeshContains(shape, [0, T / 2, 0]), true, 'the floor is solid');
+  assert.equal(trimeshContains(shape, [0, H + 0.3, 0]), false, 'above the rim is air');
 });
 
 // ---------------------------------------------------------------------------
