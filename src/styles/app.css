@@ -627,6 +627,7 @@ select:hover { border-color: var(--hover-border); }
 .orc-badge-done { color: var(--ok); border-color: var(--ok); }
 .orc-badge-error { color: var(--danger); border-color: var(--danger); }
 .orc-badge-stopped { color: #d6a740; border-color: #d6a740; }
+.orc-badge-flagged { color: #d97706; border-color: #d97706; }
 
 .orc-examples { display: flex; flex-direction: column; gap: 6px; }
 .orc-chip {

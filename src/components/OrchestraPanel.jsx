@@ -220,6 +220,7 @@ export default function OrchestraPanel() {
     idle: 'ready', running: 'working…',
     // "done" alone implied Orchestra AI did the work. When it did not, say so.
     done: provenance && !provenance.usedAi ? 'built without AI' : 'done ✓',
+    flagged: 'done · with issues',
     stopped: 'stopped', error: 'error',
   }[status] || status;
 

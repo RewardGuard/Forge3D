@@ -131,8 +131,10 @@ export default function AssemblyPanel() {
         <div className={'asm-report ' + (interf.ok ? 'ok' : 'err')}>
           <b>{interf.ok ? 'No interference' : `${interf.overlaps.length} interference${interf.overlaps.length === 1 ? '' : 's'}`}</b>
           {interf.nearMisses.length > 0 && <span> · {interf.nearMisses.length} under clearance</span>}
+          {(interf.contacts || []).length > 0 && <span> · {interf.contacts.length} in contact</span>}
           {interf.overlaps.map((o, i) => <p key={'o' + i} className="asm-issue">✕ {o.msg} <span className="ms-badge kernel">{o.method === 'exact' ? 'exact' : 'box'}</span></p>)}
           {interf.nearMisses.map((o, i) => <p key={'n' + i} className="asm-warn">△ {o.msg}</p>)}
+          {(interf.contacts || []).map((o, i) => <p key={'c' + i} className="muted small">▬ {o.msg}</p>)}
           <p className="muted small">{interf.basis}</p>
         </div>
       )}

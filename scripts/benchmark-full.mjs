@@ -1249,6 +1249,21 @@ check('upscaled image data keeps square pixels', () => {
 });
 
 // ---------------------------------------------------------------------------
+check('a Raspberry Pi screen is simulated from PYGAME code — rect, circle, text land where the program puts them', () => {
+  const code = ['import pygame', 'WHITE = (255, 255, 255)', 'BLUE = (30, 90, 220)', 'screen = pygame.display.set_mode((1080, 2340))', 'font = pygame.font.Font(None, 120)',
+    'screen.fill((0, 0, 0))', 'pygame.draw.rect(screen, BLUE, (60, 200, 960, 300))', 'pygame.draw.circle(screen, WHITE, (540, 1800), 120, 8)',
+    'label = font.render("Hello", True, WHITE)', 'screen.blit(label, (100, 240))', 'pygame.display.flip()'].join('\n');
+  const r = SS.renderScreen('dsi-6in-touch', code, {});
+  assert.ok(r.ok && r.calls === 4, r.note);
+  assert.deepEqual(r.fb.get(500, 450), [30, 90, 220], 'inside the blue rect');
+  assert.deepEqual(r.fb.get(540, 1680), [255, 255, 255], 'on the circle outline (r=120 above centre)');
+  assert.deepEqual(r.fb.get(540, 1800), [30, 90, 220].map(() => 0).length === 3 ? r.fb.get(540, 1800) : null, 'circle is an outline, centre stays background');
+  assert.deepEqual(r.fb.get(540, 1800), [0, 0, 0]);
+  let textPx = 0; for (let y = 240; y < 240 + 120; y++) for (let x = 100; x < 500; x++) { const p = r.fb.get(x, y); if (p[0] === 255 && p[1] === 255 && p[2] === 255) textPx++; }
+  assert.ok(textPx > 200, 'the label is drawn in white at (100,240): ' + textPx + ' px');
+  assert.deepEqual(r.unsupported, []);
+});
+
 section('19. PROFESSIONAL VIEWPORT — display state never touches the model');
 
 const vpScene = () => {
@@ -1650,6 +1665,39 @@ check('four walls + a floor merged into one body collide as a TRAY: the cavity i
   assert.equal(trimeshContains(shape, [-(W / 2 - T / 2), 0.5, 0]), true, 'the left wall is solid');
   assert.equal(trimeshContains(shape, [0, T / 2, 0]), true, 'the floor is solid');
   assert.equal(trimeshContains(shape, [0, H + 0.3, 0]), false, 'above the rim is air');
+});
+
+section('25. PROJECT FILE — everything the user authored survives save → load');
+
+check('assemblies, constraints, corner radii and feature timelines round-trip through serialize/loadProject', () => {
+  useStore.setState({
+    meshes: [
+      { id: 'A', kind: 'box', label: 'Body', position: [0, 0.5, 0], rotation: [0, 0, 0], scale: [1.6, 0.6, 1], cornerRadius_mm: 2, cornerStyle: 'chamfer', cornerSegments: 1, materialKey: 'aluminum',
+        features: [{ id: 'f1', type: 'fillet', params: { radius_mm: 3, edgeIndices: [0, 1] }, enabled: true }], featureGeom: { positions: [1, 2, 3] }, featureBusy: false },
+      { id: 'B', kind: 'cylinder', label: 'Pin', position: [0, 1.2, 0], rotation: [0, 0, 0], scale: [0.2, 0.6, 0.2] },
+    ],
+    assemblies: { sub1: { id: 'sub1', name: 'Electronics', parentId: null } },
+    constraints: [K.newConstraint('mate', 'A', 'B', { faceA: '+y', faceB: '-y', gap: 0 })],
+    nodes: [{ id: 'n1', partId: 'rpi5', x: 10, y: 10 }], wires: [], codeByNode: { n1: 'print(1)' },
+  });
+  const text = useStore.getState().serialize();
+  const obj = JSON.parse(text);
+  assert.equal(obj.version, 2);
+  assert.ok(obj.assemblies.sub1 && obj.constraints.length === 1, 'assemblies and constraints are in the file');
+  assert.equal(obj.meshes[0].featureGeom, undefined, 'regenerated geometry is not stored (replayed on load)');
+  assert.ok(obj.meshes[0].features[0].params.radius_mm === 3 && obj.meshes[0].cornerRadius_mm === 2, 'the parametric inputs are');
+  useStore.setState({ meshes: [], assemblies: {}, constraints: [], nodes: [], wires: [], codeByNode: {} });
+  assert.equal(useStore.getState().loadProject(text), true);
+  const s = useStore.getState();
+  assert.equal(s.assemblies.sub1?.name, 'Electronics');
+  assert.equal(s.constraints[0]?.type, 'mate');
+  assert.equal(s.meshes[0].cornerStyle, 'chamfer');
+  assert.equal(s.meshes[0].materialKey, 'aluminum');
+  assert.equal(s.codeByNode.n1, 'print(1)');
+  // a v1 file (no assemblies key) still loads
+  assert.equal(useStore.getState().loadProject(JSON.stringify({ version: 1, meshes: [], nodes: [], wires: [], codeByNode: {} })), true);
+  assert.deepEqual(useStore.getState().assemblies, {});
+  useStore.setState({ meshes: [], assemblies: {}, constraints: [], nodes: [], wires: [], codeByNode: {} });
 });
 
 // ---------------------------------------------------------------------------

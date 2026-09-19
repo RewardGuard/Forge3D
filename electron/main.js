@@ -7,6 +7,8 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { measureSTL } from './stlMeasure.mjs';
+// (lives in electron/ so the packaged app — which ships only dist/ and electron/ — has it)
+import { codeGenPrompt, circuitAgentPrompt, askPrompt } from './aiPrompts.mjs';
 import { createRequire } from 'node:module';
 // CommonJS module (shared with the Node test harness) — load it the CJS way
 const localAi = createRequire(import.meta.url)('./localAi.cjs');
@@ -968,21 +970,7 @@ async function generateText({ cfg, system, userText, provider: forced, maxTokens
 
 ipcMain.handle('claude:generate', async (_e, { prompt, context, target, provider: providerOverride } = {}) => {
   const cfg = readConfig();
-  const system =
-    target === 'rpi5'
-      ? 'You are an expert Raspberry Pi / Linux engineer. The board is a Raspberry Pi 5 running ' +
-        'Raspberry Pi OS (Linux) — it is a full computer, NOT an Arduino. Write a single, complete, ' +
-        'runnable Python 3 program for the described task and wiring. Prefer the gpiozero library ' +
-        '(fall back to RPi.GPIO) for GPIO, and standard Python libraries otherwise. Use the exact ' +
-        'BCM GPIO pin numbers provided. Add brief inline comments and a shebang. ' +
-        'Respond with ONLY the Python code — no markdown fences, no prose.'
-      : 'You are an expert Arduino/embedded engineer. Generate a single, complete, ' +
-        'compilable Arduino sketch (C++) for the described board and wiring. ' +
-        'Use the exact pin names/numbers provided. Add brief inline comments. ' +
-        'Respond with ONLY the code — no markdown fences, no prose.';
-  const userText =
-    (context ? `Circuit context:\n${context}\n\n` : '') +
-    `Task: ${prompt || (target === 'rpi5' ? 'Blink an LED on a GPIO pin.' : 'Blink the onboard LED.')}`;
+  const { system, userText } = codeGenPrompt({ prompt, context, target });
 
   // Orchestra passes its director provider so all its delegated work uses ONE
   // model the user actually has a key for — not the separate (possibly stale)
@@ -999,22 +987,7 @@ ipcMain.handle('claude:generate', async (_e, { prompt, context, target, provider
 // approve before applying anything to the canvas.
 ipcMain.handle('claude:circuit', async (_e, { prompt, netlist, catalog, provider: providerOverride } = {}) => {
   const cfg = readConfig();
-  const system =
-    'You are an expert electronics engineer debugging an Arduino/breadboard circuit. ' +
-    'You are given a NETLIST (parts with their pins, and the wires between them) and a user request. ' +
-    'Diagnose issues (missing power/ground, unpowered parts, wrong/missing connections) and propose concrete edits. ' +
-    'Reference pins EXACTLY as "nodeId.pin" from the netlist, e.g. "n1.+", "n2.VIN". ' +
-    'To add a new part, use op "addPart" with a valid partId from the AVAILABLE PARTS list and an optional "ref" alias; ' +
-    'you may then wire that alias, e.g. ref "x1" -> "x1.+". ' +
-    'Respond with ONLY valid JSON (no markdown, no prose) in EXACTLY this shape: ' +
-    '{"summary": string, "actions": [{"op": "addWire"|"removeWire"|"addPart"|"removePart", ' +
-    '"from"?: string, "to"?: string, "partId"?: string, "ref"?: string, "node"?: string, "why"?: string}]}. ' +
-    'Keep summary short and plain. Keep "why" under 8 words or omit it. ' +
-    'If nothing should change, return an empty actions array and say why in summary.';
-  const userText =
-    `NETLIST:\n${netlist || '(empty circuit)'}\n\n` +
-    `AVAILABLE PARTS (partId — name — pins):\n${catalog || '(none)'}\n\n` +
-    `USER REQUEST: ${prompt || 'Find and fix problems in this circuit.'}`;
+  const { system, userText } = circuitAgentPrompt({ prompt, netlist, catalog });
 
   // Building a whole circuit can take many actions — give the model plenty of
   // room so the JSON never gets cut off mid-array (truncation = unreadable).
@@ -1037,12 +1010,7 @@ ipcMain.handle('claude:circuit', async (_e, { prompt, netlist, catalog, provider
 // ---- IPC: free-form Q&A with the circuit agent (just answers, no edits) ----
 ipcMain.handle('claude:ask', async (_e, { question, netlist } = {}) => {
   const cfg = readConfig();
-  const system =
-    'You are a friendly electronics & embedded-systems assistant inside a circuit simulator. ' +
-    'Answer the user\'s question clearly and concisely in plain text (no markdown headings). ' +
-    'Use the circuit netlist for context when relevant.';
-  const userText =
-    (netlist ? `Circuit netlist:\n${netlist}\n\n` : '') + `Question: ${question || ''}`;
+  const { system, userText } = askPrompt({ question, netlist });
   const { text, mock, provider } = await generateText({ cfg, system, userText, provider: circuitProviderFor(cfg), maxTokens: 3000 });
   if (mock) return { answer: 'Mock mode — choose a circuit agent (Groq is free) and add its key in Settings to ask real questions.', mock: true, provider: 'mock' };
   return { answer: text, mock: false, provider };

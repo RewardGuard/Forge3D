@@ -18,14 +18,29 @@
 // previous geometry stays until the user fixes it.
 
 import { useStore } from './store.js';
-import { kernel, filletEdges, chamferEdges, shell, tessellate, topologyOf, validateRemoval, edgePolylines } from './kernel.js';
+import { kernel, filletEdges, chamferEdges, shell, tessellate, topologyOf, validateRemoval, edgePolylines, volumeOf } from './kernel.js';
 import { meshToShape, kernelSupports, shapeToBaked } from './kernelBridge.js';
 import { trueDimsMm } from './rounding.js';
+
+// Which face a shell leaves open, by the kernel's face order for each
+// primitive (verified against OCCT: box −X,+X,−Y,+Y,−Z,+Z; cylinder side,
+// top, bottom). A case or a tray opens at the TOP — the old default (face 0)
+// silently opened a side wall.
+export const OPEN_FACES = {
+  box:      [['3', 'Top (+Y)'], ['2', 'Bottom (−Y)'], ['0', 'Left (−X)'], ['1', 'Right (+X)'], ['4', 'Back (−Z)'], ['5', 'Front (+Z)'], ['', 'Sealed (no opening)']],
+  cylinder: [['1', 'Top (+Y)'], ['2', 'Bottom (−Y)'], ['0', 'Side'], ['', 'Sealed (no opening)']],
+};
+export const DEFAULT_OPEN_FACE = { box: 3, cylinder: 1 };
+export function openFaceLabel(kind, idx) {
+  if (idx == null) return 'sealed';
+  const o = (OPEN_FACES[kind] || OPEN_FACES.box).find(([v]) => v === String(idx));
+  return o ? o[1].replace(/\s*\(.*\)$/, '').toLowerCase() : `face ${idx}`;
+}
 
 export const FEATURE_TYPES = {
   fillet:  { label: 'Fillet',  params: { radius_mm: 2, edgeIndices: null }, icon: '◠' },
   chamfer: { label: 'Chamfer', params: { distance_mm: 1, edgeIndices: null }, icon: '◺' },
-  shell:   { label: 'Shell',   params: { thickness_mm: 1.5, openFace: 0 }, icon: '▢' },
+  shell:   { label: 'Shell',   params: { thickness_mm: 1.5, openFace: 3 }, icon: '▢' },
 };
 
 export function newFeature(type, params = {}) {
@@ -40,7 +55,7 @@ export function describeFeature(f) {
   const sel = p.edgeIndices?.length ? `${p.edgeIndices.length} edge${p.edgeIndices.length === 1 ? '' : 's'}` : 'all edges';
   if (f.type === 'fillet') return `Fillet r=${p.radius_mm} mm · ${sel}`;
   if (f.type === 'chamfer') return `Chamfer ${p.distance_mm} mm · ${sel}`;
-  if (f.type === 'shell') return `Shell ${p.thickness_mm} mm wall${p.openFace == null ? ' · sealed' : ''}`;
+  if (f.type === 'shell') return `Shell ${p.thickness_mm} mm wall · ${p.openFace == null ? 'sealed' : 'open ' + openFaceLabel(f._kind || 'box', p.openFace)}`;
   return f.type;
 }
 
@@ -122,7 +137,11 @@ export async function regenerate(mesh) {
   }
 
   const baked = await shapeToBaked(shape, { deflectionMm: 0.05 });
-  return { ok: failedAt === null, shape, geom: baked.geom, half: baked.half, halfY: baked.halfY, triangles: baked.triangles, steps, failedAt };
+  // exact volume of the regenerated solid (mm³) — a hollowed case weighs a
+  // fraction of the primitive it started from, and mass claims must use THIS
+  let volumeMm3 = null;
+  try { volumeMm3 = await volumeOf(shape); } catch { /* advisory */ }
+  return { ok: failedAt === null, shape, geom: baked.geom, half: baked.half, halfY: baked.halfY, triangles: baked.triangles, steps, failedAt, volumeMm3 };
 }
 
 /**
@@ -160,12 +179,13 @@ export async function runRegenerate(meshId) {
     if (!stillSame || featureSignature(stillSame) !== sig) return;   // edited again meanwhile — a newer run will land
     if (!(mesh.features || []).some((f) => f.enabled)) {
       // no active features → back to the plain primitive
-      useStore.getState().patchMesh(meshId, { featureGeom: null, featureHalf: null, featureSig: sig, featureSteps: r.steps || [], featureError: null, featureBusy: false });
+      useStore.getState().patchMesh(meshId, { featureGeom: null, featureHalf: null, featureVolumeMm3: null, featureSig: sig, featureSteps: r.steps || [], featureError: null, featureBusy: false });
       return;
     }
     useStore.getState().patchMesh(meshId, {
       featureGeom: r.geom ? { positions: r.geom.positions, normals: r.geom.normals } : stillSame.featureGeom,
       featureHalf: r.half || stillSame.featureHalf,
+      featureVolumeMm3: r.volumeMm3 ?? null,
       featureSig: sig,
       featureSteps: r.steps || [],
       featureError: r.ok ? null : (r.reason || r.steps?.find((s) => !s.ok)?.reason || 'A feature failed.'),

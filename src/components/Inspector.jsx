@@ -7,7 +7,7 @@ import { kernelStatus, KERNEL_UNLOCKS } from '../lib/kernel.js';
 import { ScreenPreview } from './ScreenFace.jsx';
 import MeasurePanel from './MeasurePanel.jsx';
 import FeatureTimeline from './FeatureTimeline.jsx';
-import { newFeature, scheduleRegenerate } from '../lib/features.js';
+import { newFeature, scheduleRegenerate, OPEN_FACES, DEFAULT_OPEN_FACE } from '../lib/features.js';
 import { mergeMembersToBaked } from '../lib/csgMerge.js';
 
 const AXES = ['x', 'y', 'z'];
@@ -35,6 +35,7 @@ export default function Inspector() {
   const [kBusy, setKBusy] = React.useState(false);
   const [kMsg, setKMsg] = React.useState(null);
   const [kEdges, setKEdges] = React.useState(null);
+  const [kOpen, setKOpen] = React.useState('3'); // shell: which face stays open ('' = sealed)
   const edgePick = useStore((s) => s.edgePick);
   const setEdgePickActive = useStore((s) => s.setEdgePickActive);
   const clearEdgePick = useStore((s) => s.clearEdgePick);
@@ -252,6 +253,11 @@ export default function Inspector() {
             <span className="muted small">
               {kOp === 'shell' ? 'wall thickness (mm)' : kOp === 'chamfer' ? 'distance (mm)' : 'radius (mm)'}
             </span>
+            {kOp === 'shell' && (
+              <select value={kOpen} onChange={(e) => setKOpen(e.target.value)} title="Which face is removed to open the hollow" style={{ width: 'auto' }}>
+                {(OPEN_FACES[mesh.kind] || OPEN_FACES.box).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            )}
             <button
               className="btn primary" disabled={kBusy}
               onClick={() => {
@@ -260,7 +266,7 @@ export default function Inspector() {
                 // (The old path replaced the body with a baked solid — one-way.)
                 const edgeIndices = pickedCount > 0 && kOp !== 'shell' ? [...edgePick.indices] : null;
                 const feat = kOp === 'shell'
-                  ? newFeature('shell', { thickness_mm: kVal, openFace: 0 })
+                  ? newFeature('shell', { thickness_mm: kVal, openFace: kOpen === '' ? null : Number(kOpen) })
                   : kOp === 'chamfer'
                     ? newFeature('chamfer', { distance_mm: kVal, edgeIndices })
                     : newFeature('fillet', { radius_mm: kVal, edgeIndices });

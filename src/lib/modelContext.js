@@ -47,8 +47,12 @@ function classifyRole(mesh) {
 export function bodyMass(mesh) {
   const key = mesh.kind === 'part' && mesh.partId ? partMaterialKey(mesh.partId) : (mesh.material || 'pla');
   const mat = MATERIALS[key] || MATERIALS.pla;
-  const { volCm3 } = estimateGeom(mesh);
-  return { materialKey: key, materialName: mat.name, volCm3, massG: volCm3 * mat.density };
+  // a body with kernel features (a hollowed case, a filleted block) carries
+  // the exact volume of the regenerated solid; the analytic primitive volume
+  // would report a 1.5 mm-wall case as a solid brick
+  const exact = mesh.featureVolumeMm3 != null && (mesh.features || []).some((f) => f.enabled) ? mesh.featureVolumeMm3 / 1000 : null;
+  const volCm3 = exact ?? estimateGeom(mesh).volCm3;
+  return { materialKey: key, materialName: mat.name, volCm3, massG: volCm3 * mat.density, exact: exact != null };
 }
 
 export function describeBody(mesh) {

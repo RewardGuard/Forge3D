@@ -43,7 +43,7 @@ export function motorReport() {
 }
 
 // Structural + functional deficiencies. Empty array = the circuit works.
-export function validateCircuit(archetype) {
+export function validateCircuit(archetype, { noMcu = false } = {}) {
   const { nodes, wires } = useStore.getState();
   const def = [];
   if (!nodes.length) return ['the circuit is empty'];
@@ -51,10 +51,16 @@ export function validateCircuit(archetype) {
   const has = (cat) => nodes.some((n) => CAT(n.partId) === cat);
   const motors = nodes.filter((n) => MOTOR_PARTS.has(n.partId));
 
-  if (!has('Microcontrollers')) def.push('no microcontroller (add an arduino-uno)');
+  if (noMcu) {
+    // a directly-wired toy: the only structural rules are a power source and
+    // that nothing that needs logic was smuggled in
+    if (has('Microcontrollers')) def.push('the user asked for NO microcontroller — remove it and wire the battery straight to the loads through the switch');
+  } else {
+    if (!has('Microcontrollers')) def.push('no microcontroller (add an arduino-uno)');
+    if (motors.length && !nodes.some((n) => n.partId === 'l298n' || CAT(n.partId) === 'Drivers'))
+      def.push('motors present but no motor driver (add an l298n between the MCU and the motors)');
+  }
   if (!has('Power')) def.push('no power source (add a battery, e.g. battery-9v or battery-lipo)');
-  if (motors.length && !nodes.some((n) => n.partId === 'l298n' || CAT(n.partId) === 'Drivers'))
-    def.push('motors present but no motor driver (add an l298n between the MCU and the motors)');
   if (archetype === 'car') {
     if (motors.length < 2) def.push(`a joystick car needs 2 dc-motors, found ${motors.length}`);
     if (!nodes.some((n) => n.partId === 'joystick')) def.push('no joystick to steer with');
@@ -64,7 +70,9 @@ export function validateCircuit(archetype) {
   if (motors.length) {
     const { motors: rows } = motorReport();
     const dead = rows.filter((r) => !r.active);
-    if (dead.length === rows.length) def.push('no motor turns on when the joystick is pushed forward — check power, ground, the driver inputs (IN1-IN4/ENA/ENB) and the joystick-to-MCU wiring');
+    if (dead.length === rows.length) def.push(noMcu
+      ? 'no motor turns on with the switch closed — check that battery + reaches M+ through the switch and M− returns to battery −'
+      : 'no motor turns on when the joystick is pushed forward — check power, ground, the driver inputs (IN1-IN4/ENA/ENB) and the joystick-to-MCU wiring');
     else if (dead.length) def.push(`${dead.length} of ${rows.length} motors stay off when driven (${dead.map((d) => d.nodeId).join(', ')}) — likely a missing driver/ground/enable connection`);
   }
 
@@ -396,6 +404,13 @@ export function circuitPromptFromSpec(spec) {
     `Build a COMPLETE, WORKING circuit for: ${spec.intent || spec.productType}.`,
     `Parts used: ${Object.entries(count).map(([p, n]) => `${n}× ${p}`).join(', ')}.`,
   ];
+  if (spec.noMcu) {
+    lines.push('NO microcontroller and NO motor driver — this is a directly wired toy. Use ONE toggle-switch as the on/off switch (ADD it if missing).');
+    if (motors) lines.push(`Wire battery + to the toggle-switch pin A; toggle-switch pin B to each dc-motor M+; each dc-motor M- to battery −.`);
+    if (has('led-5mm')) lines.push('Wire each led-5mm through its own res-220: toggle-switch pin B to res-220 A, res-220 B to the LED A (anode), LED K (cathode) to battery − (ADD one res-220 per LED).');
+    lines.push('Every load must have a path from battery + through the switch and back to battery −. Reference parts by the node ids in the netlist (e.g. n1.+), never by part name.');
+    return lines.join(' ');
+  }
   if (motors) lines.push(`Drive the ${motors} dc-motor(s) through L298N driver(s) — each L298N drives up to 2 motors, so ADD ${Math.ceil(motors / 2)} l298n driver(s): wire Arduino digital pins to the L298N IN1/IN2 pins, the L298N OUT1/OUT2 to each motor's M+/M-, and the battery + plus a COMMON GROUND to every driver and the Arduino.`);
   if (has('hcsr04')) lines.push('Wire the hcsr04: VCC to 5V, GND to ground, TRIG and ECHO to two Arduino digital pins.');
   if (has('pir')) lines.push('Wire the PIR: VCC to 5V, GND to ground, OUT to a digital pin.');
@@ -431,6 +446,25 @@ export function synthesizeCircuit(spec) {
   const w = (a, b) => wires.push({ op: 'addWire', from: a, to: b });
 
   const elec = spec.electronics || [];
+  if (spec.noMcu) {
+    // battery → switch → every load → battery −. No logic, no firmware.
+    const specMap = {};
+    const pwrE = elec.find((e) => e.function === 'power');
+    const batId = add(pwrE?.partId || 'battery-9v'); if (pwrE) specMap[pwrE.id] = batId;
+    const swE = elec.find((e) => e.function === 'control' && e.partId === 'toggle-switch') || elec.find((e) => e.function === 'control');
+    const swId = add(swE?.partId === 'push-button' ? 'push-button' : 'toggle-switch'); if (swE) specMap[swE.id] = swId;
+    w(`${batId}.+`, `${swId}.A`);
+    for (const e of elec.filter((x) => x.function === 'actuator' && x.partId === 'dc-motor')) {
+      const id = add(e.partId); specMap[e.id] = id;
+      w(`${swId}.B`, `${id}.M+`); w(`${id}.M-`, `${batId}.-`);
+    }
+    for (const e of elec.filter((x) => x.function === 'indicator')) {
+      const id = add(e.partId); specMap[e.id] = id; const r = add('res-220');
+      w(`${swId}.B`, `${r}.A`); w(`${r}.B`, `${id}.A`); w(`${id}.K`, `${batId}.-`);
+    }
+    st().applyAgentActions(wires);
+    return { specMap, mcuId: null, ledCount: elec.filter((x) => x.function === 'indicator').length, motors: elec.filter((x) => x.function === 'actuator').length, sensors: 0 };
+  }
   const mcuId = add(elec.find((e) => e.function === 'mcu')?.partId || 'arduino-uno');
   const batId = add(elec.find((e) => e.function === 'power')?.partId || 'battery-9v');
   const specMap = {};
@@ -482,11 +516,10 @@ export function synthesizeCircuit(spec) {
 // PRESSED, do the LEDs actually turn on?
 export function indicatorReport() {
   const { nodes, wires, codeByNode } = useStore.getState();
-  const btn = nodes.find((n) => n.partId === 'push-button');
   const leds = nodes.filter((n) => n.partId === 'led-5mm');
   if (!leds.length) return { leds: [], lit: 0, total: 0 };
-  const inputs = btn ? { [btn.id]: true } : {};
-  const sim = simulate(nodes, wires, { codeByNode, inputs, blinkPhase: true });
+  // buttons held, switches closed, pots at max — the "everything on" test input
+  const sim = simulate(nodes, wires, { codeByNode, inputs: testInputs(nodes), blinkPhase: true });
   const byNode = {};
   for (const c of sim.components) byNode[c.nodeId] = c;
   const rows = leds.map((l) => ({ nodeId: l.id, active: !!byNode[l.id]?.active }));

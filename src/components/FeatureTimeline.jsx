@@ -3,7 +3,7 @@
 // parametric: change a number here and the geometry regenerates.
 import React, { useEffect } from 'react';
 import { useStore } from '../lib/store.js';
-import { FEATURE_TYPES, describeFeature, scheduleRegenerate, featureSignature } from '../lib/features.js';
+import { FEATURE_TYPES, describeFeature, scheduleRegenerate, featureSignature, OPEN_FACES } from '../lib/features.js';
 
 export default function FeatureTimeline({ mesh }) {
   const updateFeature = useStore((s) => s.updateFeature);
@@ -37,7 +37,7 @@ export default function FeatureTimeline({ mesh }) {
             <div className="ft-head">
               <button className="ft-tog" title={f.enabled ? 'Suppress' : 'Unsuppress'} onClick={() => toggleFeature(mesh.id, f.id)}>{f.enabled ? '●' : '○'}</button>
               <span className="ft-icon">{def?.icon}</span>
-              <span className="ft-title" title={describeFeature(f)}>{describeFeature(f)}</span>
+              <span className="ft-title" title={describeFeature({ ...f, _kind: mesh.kind })}>{describeFeature({ ...f, _kind: mesh.kind })}</span>
               <span className="ft-actions">
                 <button className="ft-btn" disabled={i === 0} onClick={() => moveFeature(mesh.id, f.id, -1)} title="Earlier">↑</button>
                 <button className="ft-btn" disabled={i === features.length - 1} onClick={() => moveFeature(mesh.id, f.id, 1)} title="Later">↓</button>
@@ -55,7 +55,9 @@ export default function FeatureTimeline({ mesh }) {
               {f.type === 'shell' && (
                 <>
                   <label>wall <input type="number" step="0.1" min="0.05" value={f.params.thickness_mm} onChange={(e) => updateFeature(mesh.id, f.id, { thickness_mm: parseFloat(e.target.value) || 0.05 })} /> mm</label>
-                  <label><input type="checkbox" checked={f.params.openFace != null} onChange={(e) => updateFeature(mesh.id, f.id, { openFace: e.target.checked ? 0 : null })} /> open</label>
+                  <label>open <select value={f.params.openFace == null ? '' : String(f.params.openFace)} onChange={(e) => updateFeature(mesh.id, f.id, { openFace: e.target.value === '' ? null : Number(e.target.value) })}>
+                    {(OPEN_FACES[mesh.kind] || OPEN_FACES.box).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select></label>
                 </>
               )}
               {(f.type === 'fillet' || f.type === 'chamfer') && (

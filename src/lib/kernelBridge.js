@@ -26,6 +26,7 @@ export async function meshToShape(mesh) {
   switch (mesh.kind) {
     case 'box':
     case 'plane':
+    case 'part':   // a catalogue component is a rectangular block of its datasheet size
       return new oc.BRepPrimAPI_MakeBox_2(new oc.gp_Pnt_3(-w / 2, -h / 2, -d / 2), w, h, d).Shape();
     case 'cylinder': {
       // three.js cylinders run along Y, centred. OCCT's default runs along Z
@@ -48,8 +49,16 @@ export async function meshToShape(mesh) {
   }
 }
 
+// Solids the kernel can EDIT (fillet, chamfer, shell, STEP).
 export function kernelSupports(kind) {
   return ['box', 'plane', 'cylinder', 'sphere', 'cone'].includes(kind);
+}
+// Bodies the kernel can MEASURE exactly — the editable solids plus catalogue
+// parts (rectangular blocks). A Raspberry Pi is never filleted, but the gap
+// between it and a hollowed case is a real question; with bounding boxes
+// every part inside a case read as "overlapping the case".
+export function kernelMeasurable(kind) {
+  return kernelSupports(kind) || kind === 'part';
 }
 
 /** Tessellate an OCCT solid into the `baked` mesh shape the app already uses. */

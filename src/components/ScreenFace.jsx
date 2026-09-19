@@ -44,6 +44,8 @@ export function useScreenTexture(mesh) {
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
     tex.flipY = true;
+    // Orientation (checked in the Top view): the screen's top edge is at −Z,
+    // its left column at −X — a reader at the +Z end sees it the right way round.
     tex.needsUpdate = true;
     return { tex, note: r.note, calls: r.calls, unsupported: r.unsupported, hasCode: Boolean(code) };
   }, [partId, codeByNode, inputs]);

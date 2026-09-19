@@ -29,7 +29,19 @@ export function detectPattern(goal) {
   if (/\b(robot|rover|bot)\b/.test(g)) return 'robot';
   if (/\b(box|enclosure|case|caja|gabinete|housing|container)\b/.test(g)) return 'enclosure';
   if (/\b(lamp|lámpara|lampara|desk lamp|luminaria)\b/.test(g)) return 'lamp';
+  if (/\b(plane|airplane|aeroplane|aircraft|avi[oó]n|avioneta|jet)\b/.test(g)) return 'plane';
   return 'generic';
+}
+
+// "No microcontroller — just a battery, a switch and the motor." A toy with
+// direct wiring is a legitimate design; Orchestra used to force an Arduino and
+// an L298N into everything, then fail its own checks when the model obeyed
+// the user instead.
+export function wantsNoMcu(goal) {
+  const g = String(goal || '').toLowerCase();
+  return /\b(no|without|sin|ningún|ningun)\s+(a\s+|an\s+|un\s+)?(micro-?controller|microcontrolador|mcu|arduino|raspberry|board|placa|controlador)\b/.test(g)
+    || /\b(just|only|solo|sólo|solamente)\s+(with\s+|con\s+)?(a\s+|the\s+|la\s+|una?\s+)?(battery|bater[ií]a|pila)\b/.test(g)
+    || /\bdirect(ly)?\s+(from|to|con|a)\s+(the\s+|la\s+)?(battery|bater[ií]a)/.test(g);
 }
 
 // How many indicator LEDs the goal asks for (word or digit), default 4.
@@ -208,6 +220,50 @@ export function seedCar(goal) {
   };
 }
 
+// A toy airplane: box fuselage resting on the ground, one wing across the top,
+// a tail (stabiliser + fin), and a propeller at the nose that spins with a DC
+// motor sitting inside the nose. LEDs on the wing tips, a switch on the
+// fuselage, the battery inside. No microcontroller unless the goal asks for
+// one — a toy plane is a battery, a switch and a motor.
+export function seedPlane(goal) {
+  const g = String(goal || '').toLowerCase();
+  const FL = 180, FW = 40, FH = 36;             // fuselage length (z), width (x), height (y)
+  const fy = FH / 2;
+  const WING_SPAN = 220, WING_CHORD = 50, WING_T = 6;
+  const wingY = FH + WING_T / 2, wingZ = 15;
+  const STAB_W = 90, STAB_D = 30, STAB_T = 5, FIN_H = 40, FIN_D = 40, FIN_T = 6;
+  const tailZ = -FL / 2 + STAB_D / 2 + 5;
+  const stabY = FH + STAB_T / 2, finY = FH + STAB_T + FIN_H / 2;
+  const bodies = [
+    { id: 'fuselage', role: 'chassis', shape: 'box', dims_mm: { w: FW, h: FH, d: FL }, pos_mm: [0, fy, 0], material: 'pla' },
+    { id: 'wing', role: 'wing', shape: 'box', dims_mm: { w: WING_SPAN, h: WING_T, d: WING_CHORD }, pos_mm: [0, wingY, wingZ], material: 'pla' },
+    { id: 'stabilizer', role: 'wing', shape: 'box', dims_mm: { w: STAB_W, h: STAB_T, d: STAB_D }, pos_mm: [0, stabY, tailZ], material: 'pla' },
+    { id: 'fin', role: 'panel', shape: 'box', dims_mm: { w: FIN_T, h: FIN_H, d: FIN_D }, pos_mm: [0, finY, tailZ], material: 'pla' },
+    // the propeller: a thin bar in the XY plane just past the nose; spins with the motor
+    { id: 'propeller', role: 'propeller', shape: 'box', dims_mm: { w: 70, h: 8, d: 3 }, pos_mm: [0, fy, FL / 2 + 6], material: 'pla' },
+  ];
+  const nLeds = /\bled|leds|luces?|lights?|focos?\b/.test(g) ? Math.max(2, Math.min(4, indicatorCount(g) === 4 ? 2 : indicatorCount(g))) : 0;
+  const electronics = [
+    { id: 'pwr', partId: 'battery-9v', function: 'power', mountOn: 'fuselage', face: '+y', pos_mm: [0, fy, -30] },
+    { id: 'sw', partId: 'toggle-switch', function: 'control', mountOn: 'fuselage', face: '+y', pos_mm: [0, FH, -55] },
+    { id: 'motor0', partId: 'dc-motor', function: 'actuator', mountOn: 'fuselage', face: '+z', pos_mm: [0, fy, FL / 2 - 14] },
+  ];
+  const tipX = WING_SPAN / 2;
+  for (let i = 0; i < nLeds; i++) {
+    const side = i % 2 === 0 ? 1 : -1;
+    electronics.push({ id: 'led' + i, partId: 'led-5mm', function: 'indicator', mountOn: 'wing', face: side > 0 ? '+x' : '-x', pos_mm: [side * (tipX + 2), wingY, wingZ - (i >= 2 ? 15 : 0)] });
+  }
+  const wantsMcu = !wantsNoMcu(goal) && /\b(arduino|microcontroller|microcontrolador|program|código|code|sensor|remote|control remoto|rc)\b/.test(g);
+  if (wantsMcu) electronics.unshift({ id: 'mcu', partId: 'arduino-nano', function: 'mcu', mountOn: 'fuselage', face: '+y', pos_mm: [0, fy, 20] });
+  return {
+    intent: String(goal || 'toy airplane'), productType: 'plane', units: 'mm', isVehicle: false,
+    noMcu: !wantsMcu,
+    bodies, electronics,
+    behavior: [{ control: 'sw', drives: electronics.filter((e) => e.function === 'actuator' || e.function === 'indicator').map((e) => e.id), mode: 'hold' }],
+    constraints: { minWall_mm: 2.0, maxEnvelope_mm: 250 },
+  };
+}
+
 // UNIVERSAL requirement-driven builder — for ANY goal that has no named template.
 // It parses what the goal asks for (LEDs, a control, motors, sensors) and builds
 // an enclosure (or a driven chassis if it's a vehicle) that mounts and will wire
@@ -218,7 +274,7 @@ export function buildGenericSpec(goal) {
   const isVehicle = /\b(car|robot|rover|vehicle|coche|carro|auto|buggy|truck|tank|dron|drone)\b/.test(g);
   const nMotors = (isVehicle || /\bmotor|motores|fan|ventilador|servo\b/.test(g)) ? motorCount(g) : 0;
   const nLeds = /\bled|leds|luces?|focos?\b/.test(g) && !/\blamp|lámpara\b/.test(g) ? indicatorCount(g) : 0;
-  const control = /joystick/.test(g) ? 'joystick' : /\bbutton|bot[oó]n\b/.test(g) ? 'push-button' : /\bpot|dimmer|potenc/.test(g) ? 'potentiometer' : null;
+  const control = /joystick/.test(g) ? 'joystick' : /\bbutton|bot[oó]n\b/.test(g) ? 'push-button' : /\bpot|dimmer|potenc/.test(g) ? 'potentiometer' : /\bswitch|interruptor|apagador\b/.test(g) ? 'toggle-switch' : null;
   const sensors = [];
   if (/ultrasonic|ultrasonido|hc-?sr04|distance|distancia/.test(g)) sensors.push('hcsr04');
   if (/\bpir\b|motion|movimiento/.test(g)) sensors.push('pir');
@@ -255,19 +311,26 @@ export function buildGenericSpec(goal) {
   for (let i = 0; i < nLeds; i++) electronics.push({ id: 'led' + i, partId: 'led-5mm', function: 'indicator', mountOn: 'wall_f', face: '+x', pos_mm: [W / 2 + 2, H - 10, zAt(s++)] });
   for (const sn of sensors) electronics.push({ id: sn, partId: sn, function: 'sensor', mountOn: 'wall_f', face: '+x', pos_mm: [W / 2 + 2, H / 2, zAt(s++)] });
   if (control) electronics.push({ id: 'ctl', partId: control, function: 'control', mountOn: 'wall_f', face: '+x', pos_mm: [W / 2 + 2, 14, zAt(s++)] });
-  const behavior = control && nLeds ? [{ control: 'ctl', drives: electronics.filter((e) => e.function === 'indicator').map((e) => e.id), mode: 'hold' }] : [];
+  // a fan / propeller / pump on a static device: motors on the back wall
+  for (let i = 0; i < nMotors; i++) electronics.push({ id: 'motor' + i, partId: 'dc-motor', function: 'actuator', mountOn: 'wall_b', face: '-x', pos_mm: [-W / 2 - 12, H / 2, -D / 2 + D * ((i + 1) / (nMotors + 1))] });
+  const driven = electronics.filter((e) => e.function === 'indicator' || e.function === 'actuator').map((e) => e.id);
+  const behavior = control && driven.length ? [{ control: 'ctl', drives: driven, mode: 'hold' }] : [];
   return normalizeSpec({ intent: String(goal), productType: 'device', units: 'mm', isVehicle: false, bodies, electronics, behavior, constraints: { minWall_mm: 1.6, maxEnvelope_mm: 220 } });
 }
 
 // Build a seed spec for a pattern. ALWAYS returns a spec (the universal builder
 // handles 'generic'), so the autonomous fallback is never empty.
 export function seedSpec(pattern, goal) {
-  if (pattern === 'house') return normalizeSpec(seedHouse(goal));
-  if (pattern === 'enclosure') return normalizeSpec(seedEnclosure(goal));
-  if (pattern === 'robot') return normalizeSpec(seedRobot(goal));
-  if (pattern === 'car') return normalizeSpec(seedCar(goal));
-  if (pattern === 'lamp') return null; // lamp keeps its mechanical template
-  return buildGenericSpec(goal);
+  let spec = null;
+  if (pattern === 'house') spec = normalizeSpec(seedHouse(goal));
+  else if (pattern === 'enclosure') spec = normalizeSpec(seedEnclosure(goal));
+  else if (pattern === 'robot') spec = normalizeSpec(seedRobot(goal));
+  else if (pattern === 'car') spec = normalizeSpec(seedCar(goal));
+  else if (pattern === 'plane') spec = normalizeSpec(seedPlane(goal));
+  else if (pattern === 'lamp') return null; // lamp keeps its mechanical template
+  else spec = buildGenericSpec(goal);
+  if (spec && wantsNoMcu(goal)) { spec.noMcu = true; spec.electronics = (spec.electronics || []).filter((e) => e.function !== 'mcu' && e.function !== 'driver'); }
+  return spec;
 }
 
 // ---- LLM spec generation for NOVEL goals (beyond the seed templates) --------
@@ -320,6 +383,7 @@ export async function generateSpec(goal, deficiencies = null) {
     '{"productType":str,"bodies":[{"id":str,"role":"floor|wall|roof|enclosure|panel|base|chassis|arm","shape":"box|cylinder|pyramid","dims_mm":{"w":n,"h":n,"d":n},"pos_mm":[x,y,z],"material":"pla|abs|petg","cutouts":[{"shape":"box","dims_mm":{...},"pos_mm":[...]}]}],',
     '"electronics":[{"id":str,"partId":str,"function":"mcu|power|indicator|control|sensor|actuator|driver","mountOn":bodyId,"face":"+x|-x|+y|-y|+z|-z","pos_mm":[x,y,z]}],"behavior":[{"control":id,"drives":[ids],"mode":"hold"}]}',
     'Rules: the base/floor body rests on the ground (its bottom at y=0); other bodies stack on it; indicators/controls mount on EXTERIOR faces; use ONLY these partIds: ' + SPEC_PARTS + '.',
+    ...(wantsNoMcu(goal) ? ['The user wants NO microcontroller: electronics are only a battery (function "power"), a toggle-switch (function "control"), dc-motor(s) (function "actuator") and led-5mm indicators — do NOT include an mcu or a driver.'] : []),
   ].join('\n');
   const fix = deficiencies ? `Your PREVIOUS design FAILED these engineering checks — you MUST fix every one:\n${deficiencies}\n\n` : '';
   const userText = `GOAL: ${goal}\n\n${fix}Here is a correct example spec to follow for structure and scale (adapt it to the goal):\n${example}\n\nReturn the JSON Design Spec for the goal.`;
@@ -327,7 +391,9 @@ export async function generateSpec(goal, deficiencies = null) {
   try { resp = await window.forge.orchestra.think({ system, userText, maxTokens: 2000 }); }
   catch { return null; }
   if (!resp || resp.mock) return null;
-  return sanitizeSpec(parseAgentJson(resp.text));
+  const spec = sanitizeSpec(parseAgentJson(resp.text));
+  if (spec && wantsNoMcu(goal)) { spec.noMcu = true; spec.electronics = spec.electronics.filter((e) => e.function !== 'mcu' && e.function !== 'driver'); }
+  return spec;
 }
 
 // Fill defaults and validate dimensions.

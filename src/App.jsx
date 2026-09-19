@@ -5,12 +5,36 @@ import AuthGate from './components/onboarding/AuthGate.jsx';
 import TutorialOverlay from './components/onboarding/TutorialOverlay.jsx';
 import WelcomeAnnouncement from './components/onboarding/WelcomeAnnouncement.jsx';
 import HomeDashboard from './components/home/HomeDashboard.jsx';
+import { codeGenPrompt, circuitAgentPrompt, askPrompt } from '../electron/aiPrompts.mjs';
 
 // `window.forge` exists only inside Electron. Provide a browser fallback so the
 // renderer also runs under plain `vite` for quick iteration.
+//
+// DEV ONLY — real cloud AI in the preview. With
+//   localStorage['f3d-dev-cloud'] = JSON.stringify({ token, provider })
+// (an F3D Cloud account token, and a cloud model id such as 'glm'), the AI
+// features below call https://forge3d.design/f3d-api exactly like the desktop
+// app's main process does, using the same prompt builders (electron/aiPrompts).
+// This is how the release acceptance run is driven and screenshotted.
+const DEV_CLOUD = (() => {
+  if (!import.meta.env?.DEV) return null;
+  try { const c = JSON.parse(localStorage.getItem('f3d-dev-cloud') || 'null'); return c?.token ? { url: 'https://forge3d.design/f3d-api', provider: 'glm', ...c } : null; } catch { return null; }
+})();
+async function devCloudChat({ system, userText, maxTokens = 2000 }) {
+  const res = await fetch(`${DEV_CLOUD.url}/v1/chat`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${DEV_CLOUD.token}` },
+    body: JSON.stringify({ system, user: userText, maxTokens, provider: DEV_CLOUD.provider }), signal: AbortSignal.timeout(150_000),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Forge3D Cloud error ${res.status}`);
+  return { text: data.text || '', provider: data.provider || DEV_CLOUD.provider };
+}
 const browserFallback = {
   config: {
-    get: async () => ({ hasMeshyKey: false, hasHfToken: false, hasThingiverseToken: false, hasAnthropicKey: false, hasGeminiKey: false, hasGroqKey: false, hasMistralKey: false, hasOpenrouterKey: false, hasGlmKey: false, provider: 'mock', codeProvider: 'mock', circuitProvider: 'mock', orchestraDirector: 'base', orchestraVision: 'hf-glm45v', orchestraHeadroom: 'balanced', bridgeEnabled: false, bridgePort: 8765, bridgeRunning: false, hasBridgeToken: false, bridgeToken: '', bridgeServerPath: '', cloudPairEnabled: false, cloudPairUrl: '', hasCloudPairToken: false, cloudPairStatus: 'off' }),
+    // with a dev cloud token the preview reports the same providers the
+    // desktop app would use on a signed-in account: Forge3D Cloud ('base')
+    get: async () => ({ hasMeshyKey: false, hasHfToken: false, hasThingiverseToken: false, hasAnthropicKey: false, hasGeminiKey: false, hasGroqKey: false, hasMistralKey: false, hasOpenrouterKey: false, hasGlmKey: false, provider: 'mock', codeProvider: 'mock', circuitProvider: 'mock', orchestraDirector: 'base', orchestraVision: 'hf-glm45v', orchestraHeadroom: 'balanced', bridgeEnabled: false, bridgePort: 8765, bridgeRunning: false, hasBridgeToken: false, bridgeToken: '', bridgeServerPath: '', cloudPairEnabled: false, cloudPairUrl: '', hasCloudPairToken: false, cloudPairStatus: 'off',
+      ...(DEV_CLOUD ? { codeProvider: 'base', circuitProvider: 'base', orchestraDirector: 'base', cloudAi: DEV_CLOUD.provider, hasAccount: true } : {}) }),
     setMeshyKey: async () => ({ hasMeshyKey: false }),
     setHfToken: async () => ({ hasHfToken: false }),
     setThingiverseToken: async () => ({ hasThingiverseToken: false }),
@@ -33,25 +57,45 @@ const browserFallback = {
   },
   localAi: { discover: async () => ({ servers: [] }) },
   claude: {
-    generate: async ({ prompt }) => ({
-      mock: true,
-      code: `// Mock sketch (browser preview).\n// ${String(prompt || '').slice(0, 80)}\nvoid setup() {}\nvoid loop() {}`,
-    }),
-    circuit: async () => ({
-      mock: true,
-      raw: JSON.stringify({ summary: 'Mock agent (browser preview) — no analysis.', actions: [] }),
-    }),
-    ask: async () => ({ mock: true, answer: 'Mock mode (browser preview).' }),
+    generate: async ({ prompt, context, target }) => {
+      if (DEV_CLOUD) { const { text, provider } = await devCloudChat({ ...codeGenPrompt({ prompt, context, target }), maxTokens: 4000 }); return { code: text, mock: false, provider }; }
+      return { mock: true, code: `// Mock sketch (browser preview).\n// ${String(prompt || '').slice(0, 80)}\nvoid setup() {}\nvoid loop() {}` };
+    },
+    circuit: async ({ prompt, netlist, catalog }) => {
+      if (DEV_CLOUD) { const { text, provider } = await devCloudChat({ ...circuitAgentPrompt({ prompt, netlist, catalog }), maxTokens: 6000 }); return { raw: text, mock: false, provider }; }
+      return { mock: true, raw: JSON.stringify({ summary: 'Mock agent (browser preview) — no analysis.', actions: [] }) };
+    },
+    ask: async ({ question, netlist }) => {
+      if (DEV_CLOUD) { const { text, provider } = await devCloudChat({ ...askPrompt({ question, netlist }), maxTokens: 3000 }); return { answer: text, mock: false, provider }; }
+      return { mock: true, answer: 'Mock mode (browser preview).' };
+    },
   },
   orchestra: {
-    think: async () => ({ mock: true, text: JSON.stringify({ thought: 'Browser preview — Orchestra needs the desktop app (Electron) for real planning.', tool: 'done', args: { summary: 'Run Orchestra in the packaged app.' } }) }),
-    vision: async () => ({ mock: true, text: 'Vision preview stub (browser). Run in the desktop app with a Hugging Face token.', model: 'none' }),
+    think: async ({ system, userText, maxTokens = 1200 } = {}) => {
+      if (DEV_CLOUD) { const { text, provider } = await devCloudChat({ system, userText, maxTokens }); return { text, mock: false, provider }; }
+      return { mock: true, text: JSON.stringify({ thought: 'Browser preview — Orchestra needs the desktop app (Electron) for real planning.', tool: 'done', args: { summary: 'Run Orchestra in the packaged app.' } }) };
+    },
+    vision: async ({ prompt, imageDataUrl } = {}) => {
+      if (DEV_CLOUD) {
+        const res = await fetch(`${DEV_CLOUD.url}/v1/vision`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${DEV_CLOUD.token}` }, body: JSON.stringify({ prompt, imageDataUrl, maxTokens: 600 }), signal: AbortSignal.timeout(150_000) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || `Forge3D Cloud vision error ${res.status}`);
+        return { text: data.text || '', mock: false, model: data.model || 'cloud' };
+      }
+      return { mock: true, text: 'Vision preview stub (browser). Run in the desktop app with a Hugging Face token.', model: 'none' };
+    },
   },
   account: {
     signup: async () => { throw new Error('Accounts need the desktop app.'); },
     login: async () => { throw new Error('Accounts need the desktop app.'); },
     logout: async () => ({ hasAccount: false }),
-    me: async () => ({ hasAccount: false }),
+    me: async () => {
+      if (DEV_CLOUD) {
+        const r = await fetch(`${DEV_CLOUD.url}/me`, { headers: { authorization: `Bearer ${DEV_CLOUD.token}` } });
+        if (r.ok) { const a = await r.json(); return { hasAccount: true, ...a }; }
+      }
+      return { hasAccount: false };
+    },
     checkout: async () => ({ opened: false }),
     checkoutStorage: async () => ({ opened: false }),
     portal: async () => ({ opened: false }),

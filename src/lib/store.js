@@ -551,14 +551,28 @@ export const useStore = create((set, get) => ({
       let nodes = [...s.nodes];
       let wires = [...s.wires];
       const alias = {}; // agent ref alias -> real node id
-      const resolveNode = (ref) => alias[ref] || ref;
+      const nodeById = (id) => nodes.find((n) => n.id === id);
+      // Models name a part by its catalogue id ("battery-9v.+") or by the name
+      // they were shown ("9V Battery.+") at least as often as by the node id
+      // they were asked for. When that names exactly ONE node it is not
+      // ambiguous — resolve it instead of throwing the whole wire away.
+      const resolveNode = (ref) => {
+        if (alias[ref]) return alias[ref];
+        if (nodeById(ref)) return ref;
+        const key = String(ref).trim().toLowerCase();
+        const byPart = nodes.filter((n) => n.partId.toLowerCase() === key || (PART_BY_ID[n.partId]?.name || '').toLowerCase() === key);
+        if (byPart.length === 1) return byPart[0].id;
+        // "led-5mm#2" / "led-5mm_2" / "led2" → the 2nd node of that part
+        const m = key.match(/^([a-z0-9-]+?)[#_ ]?(\d+)$/);
+        if (m) { const list = nodes.filter((n) => n.partId.toLowerCase() === m[1] || n.partId.toLowerCase().startsWith(m[1] + '-')); const k = Number(m[2]) - 1; if (list[k]) return list[k].id; }
+        return ref;
+      };
       const parseRef = (r) => {
         const str = String(r ?? '');
-        const i = str.indexOf('.');
+        const i = str.lastIndexOf('.');
         if (i < 0) return null;
         return { node: resolveNode(str.slice(0, i)), pin: str.slice(i + 1) };
       };
-      const nodeById = (id) => nodes.find((n) => n.id === id);
       const pinOk = (node, pin) => {
         const n = nodeById(node);
         return n ? Boolean(PART_BY_ID[n.partId]?.pins?.includes(pin)) : false;
@@ -627,11 +641,12 @@ export const useStore = create((set, get) => ({
     const names = numberedNodeNames(nodes);
     const meshes = nodes.map((n, i) => {
       const p = PART_BY_ID[n.partId];
-      // mm -> scene units (scaled up so the workspace isn't micro). Floor keeps
-      // tiny parts visible. We keep the true mm in `mm` for the footprint label.
-      const w = Math.max((p.size.w / 1000) * SCENE_SCALE, 0.04);
-      const h = Math.max((p.size.h / 1000) * SCENE_SCALE, 0.04);
-      const d = Math.max((p.size.d / 1000) * SCENE_SCALE, 0.04);
+      // mm -> scene units, TRUE size. (A 0.04-unit floor used to pad every
+      // thin part up to 3.33 mm — a 3.2 mm screen or a 1.6 mm PCB then mated
+      // and measured wrong. Parts are engineering data, not icons.)
+      const w = (p.size.w / 1000) * SCENE_SCALE;
+      const h = (p.size.h / 1000) * SCENE_SCALE;
+      const d = (p.size.d / 1000) * SCENE_SCALE;
       const gap = 0.6;
       const cols = Math.ceil(Math.sqrt(nodes.length || 1));
       const gx = (i % cols) * gap - (cols * gap) / 2;
@@ -659,8 +674,12 @@ export const useStore = create((set, get) => ({
 
   // ---- project save / load ----
   serialize: () => {
-    const { meshes, nodes, wires, codeByNode } = get();
-    return JSON.stringify({ version: 1, meshes, nodes, wires, codeByNode }, null, 2);
+    // everything a user authored: bodies (with features, corner radii, materials),
+    // circuit, firmware, and — since 0.2 — the assembly tree and the constraints.
+    // v2 adds assemblies/constraints/bookmarks; v1 files still load.
+    const { meshes, nodes, wires, codeByNode, assemblies, constraints, viewport } = get();
+    const strip = (m) => { const { featureGeom, featureSteps, featureBusy, featureError, ...rest } = m; return rest; }; // regenerated on load
+    return JSON.stringify({ version: 2, meshes: meshes.map(strip), nodes, wires, codeByNode, assemblies, constraints, bookmarks: viewport?.bookmarks || [] }, null, 2);
   },
   loadProject: (data) => {
     try {
@@ -674,15 +693,23 @@ export const useStore = create((set, get) => ({
         const num = parseInt(String(w.id).replace(/\D/g, ''), 10);
         if (!isNaN(num)) wireSeq = Math.max(wireSeq, num + 1);
       }
-      set({
+      set((s) => ({
         meshes: obj.meshes || [],
         nodes: obj.nodes || [],
         wires: obj.wires || [],
         codeByNode: obj.codeByNode || {},
+        assemblies: obj.assemblies || {},
+        constraints: obj.constraints || [],
+        viewport: { ...s.viewport, bookmarks: obj.bookmarks || [], hiddenIds: [], isolatedIds: null },
         selectedMeshId: null,
+        selectedMeshIds: [],
         selectedNodeId: null,
         pendingPin: null,
-      });
+      }));
+      // kernel features are not stored as geometry — replay them (features.js
+      // imports this store, so it is loaded lazily here)
+      const withFeatures = (obj.meshes || []).filter((m) => (m.features || []).some((f) => f.enabled));
+      if (withFeatures.length) import('./features.js').then((F) => { for (const m of withFeatures) F.scheduleRegenerate(m.id, 0); }).catch(() => {});
       return true;
     } catch {
       return false;

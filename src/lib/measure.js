@@ -17,8 +17,8 @@ import { useStore } from './store.js';
 import { MATERIALS, partMaterialKey } from './materials.js';
 import { estimateGeom } from './lifesim.js';
 import { worldAABB } from './orchestraGeometry.js';
-import { kernel, edgesOf } from './kernel.js';
-import { meshToShape, kernelSupports } from './kernelBridge.js';
+import { volumeOf, kernel, edgesOf } from './kernel.js';
+import { meshToShape, kernelSupports, kernelMeasurable } from './kernelBridge.js';
 import { SCENE_SCALE } from '../data/parts.js';
 
 const MM = SCENE_SCALE / 1000;
@@ -61,7 +61,7 @@ export async function measureBody(mesh) {
         min_mm: [box.min.x, box.min.y, box.min.z].map(toMm).map(r3), max_mm: [box.max.x, box.max.y, box.max.z].map(toMm).map(r3) }
     : null;
 
-  if (kernelSupports(mesh.kind)) {
+  if (kernelMeasurable(mesh.kind)) {
     const oc = await kernel();
     const shape = await worldShape(mesh);
     const gv = new oc.GProp_GProps_1();
@@ -150,7 +150,7 @@ export async function measureBetween(a, b) {
     centreDistance_mm: r3(centre), delta_mm: delta,
     angle_deg: angleBetween(a.rotation, b.rotation),
   };
-  if (kernelSupports(a.kind) && kernelSupports(b.kind)) {
+  if (kernelMeasurable(a.kind) && kernelMeasurable(b.kind)) {
     try {
       const oc = await kernel();
       const sa = await worldShape(a), sb = await worldShape(b);
@@ -160,7 +160,19 @@ export async function measureBetween(a, b) {
         const min = d.Value();
         out.minDistance_mm = r3(min);
         out.touching = min < 1e-3;
-        out.overlapping = d.InnerSolution && d.InnerSolution() ? true : false;
+        // Distance 0 means the surfaces meet — either face-on-face contact or
+        // one body sunk into the other. InnerSolution() does not separate the
+        // two reliably; the volume the solids SHARE does (a boolean common).
+        out.overlapping = false;
+        out.sharedVolume_mm3 = 0;
+        if (min < 1e-3) {
+          try {
+            const common = new oc.BRepAlgoAPI_Common_3(sa, sb);
+            const v = await volumeOf(common.Shape());
+            out.sharedVolume_mm3 = r3(v);
+            out.overlapping = v > 1e-3;
+          } catch { out.overlapping = d.InnerSolution && d.InnerSolution() ? true : false; }
+        }
         if (d.NbSolution() > 0) {
           const p1 = d.PointOnShape1(1), p2 = d.PointOnShape2(1);
           out.closestPoints_mm = [[p1.X(), p1.Y(), p1.Z()].map(r3), [p2.X(), p2.Y(), p2.Z()].map(r3)];
@@ -174,7 +186,7 @@ export async function measureBetween(a, b) {
     }
   } else {
     out.source = 'analytic';
-    out.basis = `Centre-to-centre only — ${!kernelSupports(a.kind) ? a.kind : b.kind} is not a kernel solid, so surface distance is not available.`;
+    out.basis = `Centre-to-centre only — ${!kernelMeasurable(a.kind) ? a.kind : b.kind} is not a kernel solid, so surface distance is not available.`;
   }
   return out;
 }

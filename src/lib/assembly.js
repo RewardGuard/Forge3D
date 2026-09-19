@@ -15,7 +15,7 @@
 
 import { useStore } from './store.js';
 import { measureBody, measureBetween } from './measure.js';
-import { kernelSupports } from './kernelBridge.js';
+import { kernelMeasurable } from './kernelBridge.js';
 import { MATERIALS, partMaterialKey } from './materials.js';
 import { PART_BY_ID } from '../data/parts.js';
 import { worldAABB } from './orchestraGeometry.js';
@@ -143,7 +143,7 @@ export async function interferenceReport({ clearanceMm = 0.5, assemblyId = ROOT 
   const meshes = useStore.getState().meshes;
   const ids = meshesUnder(assemblyId);
   const list = meshes.filter((m) => ids.includes(m.id) && !m.negative);
-  const overlaps = [], nearMisses = []; let pairs = 0, exact = 0;
+  const overlaps = [], nearMisses = [], contacts = []; let pairs = 0, exact = 0;
 
   const related = (a, b) => a.attachedTo === b.id || b.attachedTo === a.id || (a.groupId && a.groupId === b.groupId);
   const aabbOverlapMm = (a, b) => {
@@ -163,13 +163,18 @@ export async function interferenceReport({ clearanceMm = 0.5, assemblyId = ROOT 
       pairs++;
       const box = aabbOverlapMm(a, b);
       if (box && !box.overlap && box.gapMm > clearanceMm * 4) continue;   // far apart by bounds — no need for the kernel
-      if (kernelSupports(a.kind) && kernelSupports(b.kind)) {
+      if (kernelMeasurable(a.kind) && kernelMeasurable(b.kind)) {
         const d = await measureBetween(a, b);
         if (d.source === 'kernel' && d.minDistance_mm != null) {
           exact++;
-          if (d.overlapping || d.minDistance_mm < 1e-3) {
-            overlaps.push({ a: a.id, b: b.id, aLabel: a.label || a.id, bLabel: b.label || b.id, method: 'exact', depthMm: box?.overlap ? +box.depthMm.toFixed(2) : 0,
-              msg: `${a.label || a.id} and ${b.label || b.id} ${d.overlapping ? 'pass through each other' : 'touch'} (exact surface check).` });
+          if (d.overlapping) {
+            overlaps.push({ a: a.id, b: b.id, aLabel: a.label || a.id, bLabel: b.label || b.id, method: 'exact', depthMm: box?.overlap ? +box.depthMm.toFixed(2) : 0, sharedVolumeMm3: d.sharedVolume_mm3,
+              msg: `${a.label || a.id} and ${b.label || b.id} pass through each other — ${d.sharedVolume_mm3 >= 1000 ? (d.sharedVolume_mm3 / 1000).toFixed(2) + ' cm³' : d.sharedVolume_mm3.toFixed(1) + ' mm³'} shared (exact boolean).` });
+          } else if (d.minDistance_mm < 1e-3) {
+            // face-on-face contact (a battery on the floor of its case) is how
+            // assemblies are built — reported, not flagged as an interference
+            contacts.push({ a: a.id, b: b.id, aLabel: a.label || a.id, bLabel: b.label || b.id, method: 'exact',
+              msg: `${a.label || a.id} and ${b.label || b.id} touch (exact surface check) — contact, not interference.` });
           } else if (d.minDistance_mm < clearanceMm) {
             nearMisses.push({ a: a.id, b: b.id, aLabel: a.label || a.id, bLabel: b.label || b.id, method: 'exact', gapMm: d.minDistance_mm,
               msg: `${a.label || a.id} and ${b.label || b.id} are ${d.minDistance_mm.toFixed(2)} mm apart — under the ${clearanceMm} mm clearance.` });
@@ -187,7 +192,7 @@ export async function interferenceReport({ clearanceMm = 0.5, assemblyId = ROOT 
     }
   }
   return {
-    ok: overlaps.length === 0, pairs, exact, clearanceMm, overlaps, nearMisses,
+    ok: overlaps.length === 0, pairs, exact, clearanceMm, overlaps, nearMisses, contacts,
     basis: `${pairs} pairs checked (${exact} with exact kernel surface distance, the rest by bounding box). Attached and grouped pairs are expected to touch and were skipped. Static positions only — moving parts are not swept through their travel.`,
   };
 }

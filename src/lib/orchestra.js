@@ -33,7 +33,7 @@ import {
   circuitPromptFromSpec, firmwarePromptFromSpec, synthesizeCircuit,
 } from './orchestraCircuit.js';
 import { detectPattern, seedSpec, generateSpec } from './orchestraSpec.js';
-import { composeGeometry, mountByNetlist, assembleVehicle } from './orchestraCompose.js';
+import { composeGeometry, mountByNetlist, assembleVehicle, attachSpinners } from './orchestraCompose.js';
 import { validateStructure, applyStructureFixes } from './orchestraPhysics.js';
 import { validateManufacture, validateIntegration } from './orchestraManufacture.js';
 import { validateAll, conforms, collectDeficiencies } from './orchestraCore.js';
@@ -199,7 +199,7 @@ async function runPipeline(goal, archetype) {
         : `Built a ${archetype} (3D + circuit + firmware + assembly), but the motors aren't turning under drive — the circuit needs a manual look. Everything else is in place.`,
     },
   });
-  S().orchestraSetStatus(ok ? 'done' : 'stopped');
+  S().orchestraSetStatus(ok ? 'done' : 'flagged');   // finished, but a validator objected — not the same as the user stopping it
 }
 
 // Project the circuit into 3D and rigidly mount each wheel onto a motor so the
@@ -488,10 +488,11 @@ async function buildCircuitWithEscalation(spec) {
       continue;
     }
     act('build_circuit', { model }, r.result, true);
-    const mcu = findMCU();
+    const mcu = spec.noMcu ? null : findMCU();
     if (mcu) { const g = await runTool('gen_code', { nodeId: mcu.id, prompt: fPrompt }); S().orchestraAddTokens(1800); act('gen_code', { model }, g.ok ? g.result : { error: g.error }, g.ok); }
     mountByNetlist(spec);
     if (spec.isVehicle) assembleVehicle();
+    attachSpinners();
     const v = validateFunctional(spec);
     act('check_circuit', { model }, v);
     if (v.ok) {
@@ -516,6 +517,7 @@ async function buildCircuitWithEscalation(spec) {
   synthesizeCircuit(spec);
   mountByNetlist(spec);
   if (spec.isVehicle) assembleVehicle();
+  attachSpinners();
   const v = validateFunctional(spec);
   act('check_circuit', { model: 'deterministic synthesizer (not AI)' }, v);
   const prov = makeProvenance('deterministic', { reason, attempts });
@@ -582,6 +584,7 @@ async function runStructurePipeline(goal, pattern, providedSpec) {
     phase('Test — watch it run in the Life Sim');
     const joy = S().nodes.find((n) => n.partId === 'joystick'); if (joy) S().setInput(joy.id, { x: 0.5, y: 1 });
     const btn = S().nodes.find((n) => n.partId === 'push-button'); if (btn) S().setInput(btn.id, true);
+    for (const sw of S().nodes.filter((n) => n.partId === 'toggle-switch')) S().setInput(sw.id, true);   // switch the toy on
     S().setOrchestraView('sim'); S().setLifeSimRunning(true); if (!S().simOn) S().toggleSim();
     await sleep(2200);
     S().setLifeSimRunning(false); S().setOrchestraView('build');
@@ -631,7 +634,7 @@ async function runStructurePipeline(goal, pattern, providedSpec) {
         : `Built a ${pattern} but flagged: ${problems.join('; ')}.`,
     },
   });
-  S().orchestraSetStatus(ok ? 'done' : 'stopped');
+  S().orchestraSetStatus(ok ? 'done' : 'flagged');   // finished, but a validator objected — not the same as the user stopping it
 }
 
 export async function runOrchestra(goal) {
@@ -649,7 +652,7 @@ export async function runOrchestra(goal) {
   }
   // cars, robots, houses and enclosures run the Design-Spec pipeline directly —
   // the exact path the acceptance tests prove.
-  if (['car', 'robot', 'house', 'enclosure'].includes(pattern)) {
+  if (['car', 'robot', 'house', 'enclosure', 'plane'].includes(pattern)) {
     phase(`Plan — recognised a "${pattern}". Design-spec pipeline: spec → geometry → circuit AI → validate → iterate.`);
     try { await runStructurePipeline(goal, pattern); }
     catch (e) { fail(`Pipeline error: ${String(e?.message || e)}`); S().orchestraSetStatus('error'); }

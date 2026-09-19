@@ -336,6 +336,12 @@ await check('PARAMETRIC: features chain — shell then fillet, and fillet then f
   const r = await regenerate(featBody([newFeature('shell', { thickness_mm: 1.5, openFace: 0 }), newFeature('fillet', { radius_mm: 0.5 })]));
   assert.ok(r.ok, r.steps.map((x) => x.reason).join());
   assert.equal(r.steps[0].faces, '6→11'); assert.equal(r.steps[1].faces, '11→51');
+  // the regenerated solid reports its EXACT volume — a shelled body is a thin
+  // wall, not the brick it started from (the copilot's mass claims read this)
+  const solid = featBody([]);
+  const dims = (await import('../src/lib/rounding.js')).trueDimsMm(solid);
+  const brick = dims[0] * dims[1] * dims[2];
+  assert.ok(r.volumeMm3 > 0 && r.volumeMm3 < brick * 0.5, `shell volume ${r.volumeMm3?.toFixed(0)} mm³ must be well under the ${brick.toFixed(0)} mm³ brick`);
   const two = await regenerate(featBody([newFeature('fillet', { radius_mm: 2, edgeIndices: [1, 3, 5, 7] }), newFeature('fillet', { radius_mm: 1, edgeIndices: [0, 2] })]));
   assert.ok(two.ok); assert.equal(two.steps[1].faces, '10→18');
 });
@@ -387,6 +393,24 @@ await check('PARAMETRIC: describeFeature reads like a timeline entry', () => {
   assert.equal(describeFeature(newFeature('fillet', { radius_mm: 2.5 })), 'Fillet r=2.5 mm · all edges');
   assert.equal(describeFeature(newFeature('chamfer', { distance_mm: 1, edgeIndices: [0, 1] })), 'Chamfer 1 mm · 2 edges');
   assert.equal(describeFeature(newFeature('shell', { thickness_mm: 1.2, openFace: null })), 'Shell 1.2 mm wall · sealed');
+});
+
+
+await check('ASSEMBLY: parts inside a hollowed case are NOT interferences — exact kernel distance, not bounding boxes', async () => {
+  const { interferenceReport } = await import('../src/lib/assembly.js');
+  const U = 12 / 1000; // mm → scene units
+  const caseBody = { id: 'case', kind: 'box', label: 'case', position: [0, 13 * U, 0], rotation: [0, 0, 0], scale: [75 * U, 26 * U, 150 * U],
+    features: [newFeature('shell', { thickness_mm: 1.5, openFace: 3 })] };
+  const pi = { id: 'pi', kind: 'part', partId: 'rpi5', label: 'Pi', size: [56 * U, 18 * U, 85 * U], mm: [56, 18, 85], position: [0, 15 * U, -25 * U], rotation: [0, 0, 0], scale: 1 };
+  const lipo = { id: 'lipo', kind: 'part', partId: 'lipo-pouch-3000', label: 'LiPo', size: [60 * U, 4.5 * U, 90 * U], mm: [60, 4.5, 90], position: [0, 3.75 * U, -20 * U], rotation: [0, 0, 0], scale: 1 };
+  useStore.setState({ meshes: [caseBody, pi, lipo], assemblies: {}, constraints: [] });
+  const r = await interferenceReport({ clearanceMm: 0.5, assemblyId: 'root' });
+  const caseHits = r.overlaps.filter((o) => o.a === 'case' || o.b === 'case');
+  assert.equal(caseHits.length, 0, 'the electronics sit in the cavity: ' + JSON.stringify(caseHits.map((o) => o.msg)));
+  assert.ok(r.contacts.some((c) => (c.a === 'lipo' || c.b === 'lipo') && (c.a === 'case' || c.b === 'case')), 'the battery resting on the floor is reported as a CONTACT: ' + JSON.stringify(r.contacts));
+  assert.ok(r.overlaps.every((o) => o.method === 'exact') && r.nearMisses.every((o) => o.method === 'exact'), 'every pair was measured exactly');
+  assert.equal(r.ok, true);
+  useStore.setState({ meshes: [] });
 });
 
 console.log('');

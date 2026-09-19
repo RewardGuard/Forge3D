@@ -6,7 +6,7 @@
 // of this; this is the deterministic ground truth.
 // ============================================================================
 import { useStore } from './store.js';
-import { composeGeometry, mountByNetlist, assembleVehicle } from './orchestraCompose.js';
+import { composeGeometry, mountByNetlist, assembleVehicle, attachSpinners } from './orchestraCompose.js';
 import { synthesizeCircuit, indicatorReport, motorReport, validateCircuit } from './orchestraCircuit.js';
 import { validateStructure, applyStructureFixes } from './orchestraPhysics.js';
 import { validateManufacture, validateIntegration } from './orchestraManufacture.js';
@@ -20,6 +20,7 @@ export function composeDeterministic(spec) {
   synthesizeCircuit(spec);
   mountByNetlist(spec);
   if (spec.isVehicle) assembleVehicle();
+  attachSpinners();
 }
 
 // Run EVERY validator and fold them into one verdict. This is the objective
@@ -30,7 +31,7 @@ export function validateAll(spec) {
   const integ = validateIntegration(spec);
   const ind = indicatorReport();
   const mr = motorReport();
-  const circ = validateCircuit('generic');
+  const circ = validateCircuit('generic', { noMcu: Boolean(spec.noMcu) });
 
   const expMotors = (spec.electronics || []).filter((e) => e.function === 'actuator' && e.partId === 'dc-motor').length;
   const ledOk = ind.total ? ind.lit === ind.total : true;

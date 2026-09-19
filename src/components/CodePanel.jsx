@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useStore } from '../lib/store.js';
+import { screenSpec } from '../lib/screenSim.js';
 import { PART_BY_ID } from '../data/parts.js';
 import { buildNetlist, partsCatalog } from '../lib/netlist.js';
 import { parseAgentJson } from '../lib/agentJson.js';
@@ -36,6 +37,24 @@ export function buildContext(node, nodes, wires) {
   }
   if (conns.length) lines.push('Connections:', ...conns);
   else lines.push('No wires connected to this board yet — assume a simple standalone sketch.');
+
+  // Screens the board can draw on, with the API the simulator understands, so
+  // the generated program renders in the Screen panel and on the 3D part —
+  // not just in the model's imagination.
+  for (const n of nodes) {
+    const spec = screenSpec(n.partId);
+    if (!spec || n.id === node.id) continue;
+    const name = PART_BY_ID[n.partId]?.name || n.partId;
+    if (/^rpi/.test(part.id) && part.id !== 'rpi-pico') {   // Linux boards program in Python
+      lines.push(`Display attached: ${name}, ${spec.w}×${spec.h} px${spec.color ? ' colour' : ' mono'}. Draw the UI with pygame on a full-screen surface named "screen" `
+        + `(pygame.display.set_mode((${spec.w}, ${spec.h})), screen.fill(...), pygame.draw.rect/circle/line(screen, colour, ...), labels via font.render(...) + screen.blit(label, (x, y))). `
+        + 'Declare colours as (r, g, b) tuples at module level. Draw the whole first screen in the main body, then handle events in the loop.');
+    } else if (spec.api === 'Adafruit_GFX') {
+      lines.push(`Display attached: ${name}, ${spec.w}×${spec.h} px${spec.color ? ' colour' : ' mono'}. Draw with the Adafruit_GFX API on an object named "display" (fillScreen, setCursor, setTextSize, print, drawRect, fillRect, drawCircle…).`);
+    } else {
+      lines.push(`Display attached: ${name} (${spec.api}).`);
+    }
+  }
   return lines.filter(Boolean).join('\n');
 }
 

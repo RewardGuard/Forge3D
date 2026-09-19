@@ -159,6 +159,36 @@ console.log('\n\x1b[1mNOVEL DEVICE\x1b[0m — a goal with NO named template stil
   console.log(`     → built the novel device by itself, ${res.report.bom.parts} BOM parts ~$${res.report.bom.total_usd}`);
 }
 
+// ------------------------------------------- NO MICROCONTROLLER (toy plane) --
+// "a toy airplane with lights and a propeller that spins with a motor, no
+// microcontroller — just the battery, a switch and the components". Orchestra
+// used to force an Arduino + L298N into it and then fail its own check.
+{
+  const goal = 'Make a toy airplane with two LED lights and a propeller that spins with a DC motor, no microcontroller, just a battery, a switch, the motor and the LEDs.';
+  const { wantsNoMcu } = await import('../src/lib/orchestraSpec.js');
+  ok('the goal is understood as "no microcontroller"', wantsNoMcu(goal));
+  const spec = seedSpec(detectPattern(goal), goal);
+  ok('the spec carries the policy and holds no mcu/driver', spec.noMcu === true && !spec.electronics.some((e) => e.function === 'mcu' || e.function === 'driver'), JSON.stringify(spec.electronics.map((e) => e.partId)));
+  resetScene();
+  const built = JSON.parse(JSON.stringify(spec));
+  composeDeterministic(built);   // mount holes are added to the spec it composes
+  const nodes = useStore.getState().nodes.map((n) => n.partId);
+  ok('the synthesized circuit has NO Arduino and NO L298N', !nodes.some((p) => /arduino|esp32|rpi|l298n/.test(p)), nodes.join(','));
+  ok('…but does have the battery, a switch, the motor and the LEDs', nodes.includes('battery-9v') && nodes.includes('toggle-switch') && nodes.includes('dc-motor') && nodes.filter((p) => p === 'led-5mm').length >= 1, nodes.join(','));
+  const v = validateAll(built);
+  ok('with the switch closed the propeller motor spins and every LED lights (sim)', v.electrical.motors && /^(\d+)\/\1$/.test(v.electrical.leds || '1/1') && v.electrical.ok, JSON.stringify(v.electrical));
+  ok('the circuit validator raises no "add an arduino" deficiency', !(v.electrical.deficiencies || []).some((d) => /microcontroller/.test(d)), JSON.stringify(v.electrical.deficiencies));
+  ok('no firmware is written (there is nothing to run it on)', Object.keys(useStore.getState().codeByNode).length === 0);
+  // and the PLANE template specifically: it is a plane, every check passes, the propeller spins with the motor
+  ok('"airplane" is a known pattern with its own engineering template', detectPattern(goal) === 'plane');
+  const roles = useStore.getState().meshes.map((m) => m.role);
+  ok('fuselage, wing, tail and a propeller body exist', roles.includes('chassis') && roles.includes('wing') && roles.includes('propeller'), roles.join(','));
+  const prop = useStore.getState().meshes.find((m) => m.role === 'propeller');
+  const motor = useStore.getState().meshes.find((m) => m.kind === 'part' && m.partId === 'dc-motor');
+  ok('the propeller is attached to the DC motor so the Life Sim spins it', prop && motor && prop.attachedTo === motor.id, `${prop?.attachedTo} vs ${motor?.id}`);
+  ok('the whole design passes EVERY validator (electrical, structural, integration, printable)', v.ok, JSON.stringify({ i: v.integration?.issues, d: v.dimensional?.issues, s: v.structural?.issues }));
+}
+
 // -------------------------------------------------------------- SUMMARY -------
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`${fail === 0 ? '\x1b[32m' : '\x1b[31m'}${pass} passed, ${fail} failed\x1b[0m`);

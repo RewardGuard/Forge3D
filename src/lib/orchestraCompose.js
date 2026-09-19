@@ -138,6 +138,24 @@ export function assembleVehicle() {
   return { wheels: wheels.length, motors: motors.length, attached };
 }
 
+// A propeller / fan body spins with the nearest DC motor, exactly like a
+// wheel does on a vehicle: attached, and flagged as spinning so the Life Sim
+// turns it when the motor is powered.
+export function attachSpinners() {
+  const st = useStore.getState();
+  const spinners = st.meshes.filter((m) => m.role === 'propeller' || m.role === 'fan' || m.role === 'rotor');
+  const motors = st.meshes.filter((m) => m.kind === 'part' && m.partId === 'dc-motor');
+  let attached = 0;
+  for (const sp of spinners) {
+    let best = null, bestD = Infinity;
+    for (const mo of motors) { const d = Math.hypot(...sp.position.map((v, i) => v - mo.position[i])); if (d < bestD) { bestD = d; best = mo; } }
+    if (!best) continue;
+    st.setAttachment(sp.id, best.id, true);
+    attached++;
+  }
+  return { spinners: spinners.length, motors: motors.length, attached };
+}
+
 // Panel-mounted indicators/controls need a through-hole so the part seats in the
 // wall and its wires reach the inside. Add those holes as CSG cutouts on the host
 // body BEFORE geometry is built — the design is manufacturable by construction,
@@ -152,11 +170,19 @@ export function addMountHoles(spec) {
     const dia = Math.max(p.size.w, p.size.d) + 2; // part + 2 mm clearance
     const d = host.dims_mm || {};
     const dims = [d.w || 50, d.h || 50, d.d || 50];
-    const axis = dims[0] <= dims[1] && dims[0] <= dims[2] ? 0 : dims[2] <= dims[1] ? 2 : 1; // thickness = smallest
-    const through = dims[axis] * 3;
-    const cdims = axis === 0 ? { w: through, h: dia, d: dia } : axis === 2 ? { w: dia, h: dia, d: through } : { w: dia, h: through, d: dia };
+    // The hole runs along the axis of the face the part mounts on. A thin wall
+    // gets a through-hole; a thick body (an LED in a wing TIP, a switch in a
+    // fuselage) gets a pocket one diameter deep from that face — the old rule
+    // always drilled through the thinnest axis, which for a wing-tip LED was
+    // a vertical hole in empty air next to the wing.
+    const f = String(e.face || '+x');
+    const axis = { x: 0, y: 1, z: 2 }[f[1]] ?? (dims[0] <= dims[1] && dims[0] <= dims[2] ? 0 : dims[2] <= dims[1] ? 2 : 1);
+    const sign = f[0] === '-' ? -1 : 1;
+    const thin = dims[axis] <= 2 * dia;
+    const len = thin ? dims[axis] * 3 : dia;
+    const cdims = axis === 0 ? { w: len, h: dia, d: dia } : axis === 2 ? { w: dia, h: dia, d: len } : { w: dia, h: len, d: dia };
     const cpos = [...(e.pos_mm || host.pos_mm)];
-    cpos[axis] = host.pos_mm[axis]; // centre the hole in the wall thickness
+    cpos[axis] = thin ? host.pos_mm[axis] : host.pos_mm[axis] + sign * (dims[axis] / 2 - dia / 2 + 1); // centred in the wall, or a pocket at the face
     (host.cutouts = host.cutouts || []).push({ id: 'hole_' + e.id, shape: 'box', dims_mm: cdims, pos_mm: cpos, forPart: e.id });
   }
   return spec;
